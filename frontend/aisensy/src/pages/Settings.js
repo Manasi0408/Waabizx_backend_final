@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { getProfile, isAuthenticated } from '../services/authService';
 import { getSettings, saveSettings } from '../services/settingsService';
+import { getNotifications, markAsRead, markAllAsRead } from '../services/notificationService';
 
 function Settings() {
   const navigate = useNavigate();
@@ -11,6 +12,10 @@ function Settings() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [notificationDropdownOpen, setNotificationDropdownOpen] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [loadingNotifications, setLoadingNotifications] = useState(false);
+  const notificationRef = useRef(null);
 
   // Settings form data
   const [settings, setSettings] = useState({
@@ -68,6 +73,70 @@ function Settings() {
     fetchData();
   }, [navigate]);
 
+  // Fetch notifications function
+  const fetchNotifications = async (forceRefresh = false) => {
+    try {
+      console.log('Fetching notifications...', { forceRefresh });
+      setLoadingNotifications(true);
+      
+      // Add a small delay to ensure fresh data if force refresh
+      if (forceRefresh) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      
+      const data = await getNotifications();
+      console.log('Notifications fetched:', data?.length || 0, 'items');
+      
+      // Sort notifications by created_at DESC (newest first) to ensure latest appear first
+      const sortedData = (data || []).sort((a, b) => {
+        const dateA = new Date(a.created_at || 0);
+        const dateB = new Date(b.created_at || 0);
+        return dateB - dateA; // Descending order (newest first)
+      });
+      
+      console.log('Sorted notifications (newest first):', sortedData.map(n => ({ id: n.id, title: n.title, created_at: n.created_at })));
+      
+      // Always update to ensure latest notifications are shown
+      setNotifications(sortedData);
+    } catch (error) {
+      console.error('Error fetching notifications:', error);
+    } finally {
+      setLoadingNotifications(false);
+    }
+  };
+
+  // Fetch notifications on mount
+  useEffect(() => {
+    if (isAuthenticated()) {
+      fetchNotifications();
+      const interval = setInterval(fetchNotifications, 10000);
+      return () => clearInterval(interval);
+    }
+  }, []);
+
+  // Refresh notifications when dropdown opens
+  useEffect(() => {
+    if (notificationDropdownOpen && isAuthenticated()) {
+      // Force immediate fetch when dropdown opens
+      console.log('Dropdown opened, fetching fresh notifications...');
+      fetchNotifications(true);
+    }
+  }, [notificationDropdownOpen]);
+
+  // Close notification dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (notificationRef.current && !notificationRef.current.contains(event.target)) {
+        setNotificationDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setSettings(prev => ({
@@ -93,6 +162,47 @@ function Settings() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleNotificationClick = async (notification) => {
+    // Mark as read if unread
+    if (!notification.is_read) {
+      try {
+        await markAsRead(notification.id);
+        setNotifications(prev => 
+          prev.map(n => n.id === notification.id ? { ...n, is_read: true } : n)
+        );
+      } catch (error) {
+        console.error('Error marking notification as read:', error);
+      }
+    }
+    
+    // Close dropdown after clicking (like AiSensy)
+    setNotificationDropdownOpen(false);
+  };
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      await markAllAsRead();
+      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+    } catch (error) {
+      console.error('Error marking all as read:', error);
+    }
+  };
+
+  const unreadCount = notifications.filter(n => !n.is_read).length;
+
+  const formatTime = (dateString) => {
+    if (!dateString) return 'Just now';
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffInSeconds = Math.floor((now - date) / 1000);
+    
+    if (diffInSeconds < 60) return 'Just now';
+    if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
+    if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
+    if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d ago`;
+    return date.toLocaleDateString();
   };
 
   const settingsMenu = [
@@ -136,11 +246,141 @@ function Settings() {
         {/* Right Side Icons */}
         <div className="flex items-center gap-3 md:gap-4">
           {/* Notifications */}
-          <div className="relative w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center cursor-pointer hover:bg-gray-200 transition">
-            <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-            </svg>
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
+          <div className="relative" ref={notificationRef}>
+            <button
+              onClick={async () => {
+                const willOpen = !notificationDropdownOpen;
+                setNotificationDropdownOpen(willOpen);
+                // Always fetch fresh notifications when opening dropdown
+                if (willOpen) {
+                  // Force refresh when opening dropdown
+                  fetchNotifications(true);
+                }
+              }}
+              className="relative w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center cursor-pointer hover:bg-gray-200 transition focus:outline-none"
+            >
+              <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+              </svg>
+              {unreadCount > 0 && (
+                <>
+                  {/* Red dot indicator */}
+                  <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>
+                  {/* Count badge */}
+                  <span className="absolute -top-1 -right-1 min-w-[20px] h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center px-1.5 border-2 border-white shadow-sm">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                </>
+              )}
+            </button>
+
+            {/* Notification Dropdown */}
+            {notificationDropdownOpen && (
+              <div className="absolute right-0 mt-2 w-80 md:w-96 bg-white rounded-lg shadow-xl border border-gray-200 z-50 max-h-[500px] flex flex-col">
+                <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between bg-gray-50">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-gray-800">Notifications</h3>
+                    {unreadCount > 0 && (
+                      <span className="px-2 py-0.5 bg-red-500 text-white text-xs font-semibold rounded-full">
+                        {unreadCount}
+                      </span>
+                    )}
+                  </div>
+                  {unreadCount > 0 && (
+                    <button
+                      onClick={async () => {
+                        await handleMarkAllAsRead();
+                        fetchNotifications();
+                      }}
+                      className="text-xs text-blue-600 hover:text-blue-700 font-medium transition"
+                    >
+                      Mark all as read
+                    </button>
+                  )}
+                </div>
+
+                <div className="overflow-y-auto flex-1">
+                  {loadingNotifications ? (
+                    <div className="px-4 py-8 text-center">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                      <p className="mt-2 text-sm text-gray-500">Loading notifications...</p>
+                    </div>
+                  ) : notifications.length === 0 ? (
+                    <div className="px-4 py-8 text-center">
+                      <svg className="w-12 h-12 text-gray-300 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                      </svg>
+                      <p className="text-sm text-gray-500">No notifications</p>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-gray-100">
+                      {notifications.map((notification) => (
+                        <button
+                          key={notification.id}
+                          onClick={() => handleNotificationClick(notification)}
+                          className={`w-full px-4 py-3 text-left hover:bg-gray-50 transition border-l-4 ${
+                            !notification.is_read 
+                              ? 'bg-blue-50 border-blue-500' 
+                              : 'bg-white border-transparent'
+                          }`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${
+                              notification.type === 'campaign' ? 'bg-blue-100' :
+                              notification.type === 'template' ? 'bg-green-100' :
+                              notification.type === 'message' ? 'bg-purple-100' :
+                              'bg-gray-100'
+                            }`}>
+                              {notification.type === 'campaign' && (
+                                <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                </svg>
+                              )}
+                              {notification.type === 'template' && (
+                                <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                </svg>
+                              )}
+                              {notification.type === 'message' && (
+                                <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                                </svg>
+                              )}
+                              {!['campaign', 'template', 'message'].includes(notification.type) && (
+                                <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                              )}
+                            </div>
+
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex-1">
+                                  <p className={`text-sm font-medium ${
+                                    !notification.is_read ? 'text-gray-900' : 'text-gray-700'
+                                  }`}>
+                                    {notification.title}
+                                  </p>
+                                  <p className="text-xs text-gray-500 mt-1 line-clamp-2">
+                                    {notification.body}
+                                  </p>
+                                </div>
+                                {!notification.is_read && (
+                                  <div className="flex-shrink-0 w-2 h-2 bg-blue-600 rounded-full mt-1"></div>
+                                )}
+                              </div>
+                              <p className="text-xs text-gray-400 mt-1">
+                                {formatTime(notification.created_at)}
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
           
           {/* User Profile */}

@@ -12,6 +12,11 @@ const contactRoutes = require('./routes/contactRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const templateRoutes = require('./routes/templateRoutes');
 const settingRoutes = require("./routes/settingRoutes");
+const metaWebhookRoutes = require('./routes/metaWebhookRoutes');
+const metaMessageRoutes = require('./routes/metaMessageRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
+const inboxRoutes = require('./routes/inboxRoutes');
 
 // Initialize Express app
 const app = express();
@@ -54,6 +59,11 @@ app.use('/api/contacts', contactRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/templates', templateRoutes);
 app.use("/api/settings", settingRoutes);
+app.use('/webhooks', metaWebhookRoutes);
+app.use('/messages', metaMessageRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/inbox', inboxRoutes);
 
 // 404 handler
 app.use((req, res) => {

@@ -1,9 +1,15 @@
 const sequelize = require('../config/database');
+const { DataTypes } = require('sequelize');
 const User = require('./User');
 const Campaign = require('./Campaign');
 const Contact = require('./Contact');
 const Template = require('./Template');
 const Message = require('./Message');
+const Notification = require('./Notification');
+
+// Import meta models for webhooks
+const WebhookLog = require('./metaWebhook')(sequelize, DataTypes);
+const MetaMessage = require('./metaMessage')(sequelize, DataTypes);
 
 // Define associations
 User.hasMany(Campaign, { foreignKey: 'userId', onDelete: 'CASCADE' });
@@ -20,6 +26,9 @@ Message.belongsTo(Campaign, { foreignKey: 'campaignId' });
 
 Contact.hasMany(Message, { foreignKey: 'contactId', onDelete: 'CASCADE' });
 Message.belongsTo(Contact, { foreignKey: 'contactId' });
+
+User.hasMany(Notification, { foreignKey: 'userId', onDelete: 'CASCADE' });
+Notification.belongsTo(User, { foreignKey: 'userId' });
 
 const syncDatabase = async () => {
   try {
@@ -41,5 +50,8 @@ module.exports = {
   Contact,
   Template,
   Message,
+  Notification,
+  WebhookLog,
+  MetaMessage,
   syncDatabase
 };

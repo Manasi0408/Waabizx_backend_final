@@ -86,6 +86,38 @@ exports.getContacts = async (req, res) => {
   }
 };
 
+exports.getContactById = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const contactId = req.params.id;
+
+    const contact = await Contact.findOne({
+      where: {
+        id: contactId,
+        userId
+      }
+    });
+
+    if (!contact) {
+      return res.status(404).json({
+        success: false,
+        message: 'Contact not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      contact
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
 exports.importContacts = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -159,6 +191,44 @@ exports.updateContact = async (req, res) => {
 
     res.json({
       success: true,
+      contact
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+exports.optOutContact = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const contactId = req.params.id;
+
+    const contact = await Contact.findOne({
+      where: {
+        id: contactId,
+        userId
+      }
+    });
+
+    if (!contact) {
+      return res.status(404).json({
+        success: false,
+        message: 'Contact not found'
+      });
+    }
+
+    // Update status to 'unsubscribed' (opt-out/block)
+    await contact.update({
+      status: 'unsubscribed'
+    });
+
+    res.json({
+      success: true,
+      message: 'Contact opted out successfully',
       contact
     });
   } catch (error) {

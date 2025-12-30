@@ -5,6 +5,12 @@ exports.getDashboardStats = async (req, res) => {
   try {
     const userId = req.user.id;
 
+    // Get time range from query parameter (default to 7 days)
+    const daysParam = req.query.days || req.query.range || '7';
+    const days = parseInt(daysParam);
+    // Validate and set to valid values: 7, 30, or 90
+    const validDays = [7, 30, 90].includes(days) ? days : 7;
+
     // Total Contacts
     const totalContacts = await Contact.count({ where: { userId } });
 
@@ -37,7 +43,7 @@ exports.getDashboardStats = async (req, res) => {
       col: 'id'
     });
 
-    // Delivery Rate (last 7 days)
+    // Delivery Rate (last 7 days - keep this fixed)
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
@@ -61,7 +67,10 @@ exports.getDashboardStats = async (req, res) => {
     const { total = 0, delivered = 0 } = messagesLast7Days[0] || {};
     const deliveryRate = total > 0 ? Math.round((delivered / total) * 100) : 0;
 
-    // Messages chart data (last 7 days)
+    // Messages chart data (based on selected time range)
+    const daysAgo = new Date();
+    daysAgo.setDate(daysAgo.getDate() - validDays);
+
     const chartData = await sequelize.query(`
       SELECT 
         DATE(m.sentAt) as date,
@@ -69,25 +78,34 @@ exports.getDashboardStats = async (req, res) => {
       FROM \`${messageTableName}\` m
       INNER JOIN \`${campaignTableName}\` c ON m.campaignId = c.id
       WHERE c.userId = :userId
-        AND m.sentAt >= :sevenDaysAgo
+        AND m.sentAt >= :daysAgo
         AND m.type = 'outgoing'
       GROUP BY DATE(m.sentAt)
       ORDER BY DATE(m.sentAt) ASC
     `, {
-      replacements: { userId, sevenDaysAgo },
+      replacements: { userId, daysAgo },
       type: sequelize.QueryTypes.SELECT
     });
 
-    // Format chart data with day names
+    // Format chart data based on time range
     let formattedChartData = [];
     if (chartData && chartData.length > 0) {
-      formattedChartData = chartData.map(item => ({
-        name: new Date(item.date).toLocaleDateString('en-US', { weekday: 'short' }),
-        messages: parseInt(item.messages) || 0
-      }));
+      if (validDays === 7) {
+        // For 7 days, show weekday names
+        formattedChartData = chartData.map(item => ({
+          name: new Date(item.date).toLocaleDateString('en-US', { weekday: 'short' }),
+          messages: parseInt(item.messages) || 0
+        }));
+      } else {
+        // For 30 or 90 days, show date format (MM/DD)
+        formattedChartData = chartData.map(item => ({
+          name: new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          messages: parseInt(item.messages) || 0
+        }));
+      }
     } else {
-      // If no data, return default chart data
-      formattedChartData = getDefaultChartData();
+      // If no data, return default chart data based on time range
+      formattedChartData = getDefaultChartData(validDays);
     }
 
     // Recent activities - Get recent campaigns and messages
@@ -194,12 +212,27 @@ exports.getDashboardStats = async (req, res) => {
 };
 
 // Helper function for default chart data
-function getDefaultChartData() {
-  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  return days.map(day => ({
-    name: day,
-    messages: Math.floor(Math.random() * 100) + 100
-  }));
+function getDefaultChartData(days = 7) {
+  if (days === 7) {
+    const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return dayNames.map(day => ({
+      name: day,
+      messages: Math.floor(Math.random() * 100) + 100
+    }));
+  } else {
+    // For 30 or 90 days, return empty array or generate sample dates
+    const data = [];
+    const today = new Date();
+    for (let i = days - 1; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      data.push({
+        name: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        messages: 0
+      });
+    }
+    return data;
+  }
 }
 
 // Helper function to format time ago
