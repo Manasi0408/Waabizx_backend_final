@@ -45,7 +45,10 @@ export const getContactMessages = async (phone) => {
       throw new Error('No token found');
     }
 
-    const response = await fetch(`${API_URL}/inbox/${phone}/messages`, {
+    // Don't double-encode: Express will handle URL encoding automatically
+    // Just replace + with %2B manually to avoid double encoding
+    const safePhone = phone.replace(/\+/g, '%2B');
+    const response = await fetch(`${API_URL}/inbox/${safePhone}/messages`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -56,6 +59,15 @@ export const getContactMessages = async (phone) => {
     const data = await response.json();
 
     if (!response.ok) {
+      // 404 is expected if contact doesn't exist yet - don't log as error
+      if (response.status === 404) {
+        throw new Error('Contact not found');
+      }
+      console.error('getContactMessages API error:', {
+        status: response.status,
+        statusText: response.statusText,
+        data: data
+      });
       throw new Error(data.error || data.message || 'Failed to fetch messages');
     }
 
@@ -68,6 +80,10 @@ export const getContactMessages = async (phone) => {
 
     throw new Error(data.message || 'Failed to fetch messages');
   } catch (error) {
+    // Don't log 404 errors as they're expected when contact doesn't exist
+    if (!error.message.includes('Contact not found')) {
+      console.error('Error in getContactMessages:', error);
+    }
     throw error;
   }
 };
@@ -92,7 +108,12 @@ export const sendMessage = async (phone, text) => {
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(data.error || data.message || 'Failed to send message');
+      console.error('sendMessage (inbox) API error:', {
+        status: response.status,
+        statusText: response.statusText,
+        data: data
+      });
+      throw new Error(data.error || data.message || `Failed to send message (${response.status})`);
     }
 
     if (data.success) {
@@ -101,6 +122,7 @@ export const sendMessage = async (phone, text) => {
 
     throw new Error(data.message || 'Failed to send message');
   } catch (error) {
+    console.error('Error in sendMessage (inbox):', error);
     throw error;
   }
 };
@@ -113,7 +135,10 @@ export const markAsRead = async (phone) => {
       throw new Error('No token found');
     }
 
-    const response = await fetch(`${API_URL}/inbox/${phone}/read`, {
+    // Don't double-encode: Express will handle URL encoding automatically
+    // Just replace + with %2B manually to avoid double encoding
+    const safePhone = phone.replace(/\+/g, '%2B');
+    const response = await fetch(`${API_URL}/inbox/${safePhone}/read`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',

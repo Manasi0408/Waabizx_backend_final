@@ -1,8 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import InfiniteScroll from 'react-infinite-scroll-component';
 import { getProfile, isAuthenticated, logout } from '../services/authService';
 import { getNotifications, markAsRead as markNotificationAsRead, markAllAsRead } from '../services/notificationService';
 import { getInboxList, getContactMessages, sendMessage, markAsRead } from '../services/inboxService';
+import { getInboundMessages, sendMetaMessage, getAllMetaMessages, getWebhookLogs } from '../services/metaMessageService';
+import { initializeSocket, disconnectSocket, joinContactRoom, leaveContactRoom, sendTypingStart, sendTypingStop, onSocketEvent, offSocketEvent } from '../services/socketService';
+import { deleteMessage, forwardMessage, addReaction, searchMessages, getPaginatedMessages } from '../services/messageService';
+import { uploadMedia, sendMediaMessage } from '../services/mediaService';
+import { updateContact, getContactHistory, updateTypingStatus, updateOnlineStatus } from '../services/contactManagementService';
 
 function Inbox() {
   const navigate = useNavigate();
@@ -21,10 +27,27 @@ function Inbox() {
   const [messageText, setMessageText] = useState('');
   const [sending, setSending] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [messageSearchQuery, setMessageSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [typingContacts, setTypingContacts] = useState({});
+  const [onlineContacts, setOnlineContacts] = useState({});
+  const [selectedMessage, setSelectedMessage] = useState(null);
+  const [showMessageMenu, setShowMessageMenu] = useState(null);
+  const [showContactMenu, setShowContactMenu] = useState(null);
+  const [showForwardDialog, setShowForwardDialog] = useState(false);
+  const [showContactEditDialog, setShowContactEditDialog] = useState(false);
+  const [editingContact, setEditingContact] = useState(null);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
+  const [showMediaPicker, setShowMediaPicker] = useState(false);
   const dropdownRef = useRef(null);
   const notificationRef = useRef(null);
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // Fetch user profile
   useEffect(() => {
@@ -76,54 +99,420 @@ function Inbox() {
     }
   }, []);
 
+  // Initialize Socket.IO when user is loaded
+  useEffect(() => {
+    if (isAuthenticated() && user) {
+      const token = localStorage.getItem('token');
+      const socket = initializeSocket(user.id, token);
+
+      // Set up socket event listeners
+      const handleNewMessage = (message) => {
+        if (selectedContact && (message.contactId === selectedContact.id || message.phone === selectedContact.phone)) {
+          setMessages(prev => {
+            // Check if message already exists (by ID or content+timestamp)
+            const exists = prev.find(m => 
+              m.id === message.id || 
+              (m.content === message.content && 
+               Math.abs(new Date(m.sentAt || m.createdAt) - new Date(message.sentAt || message.createdAt)) < 2000)
+            );
+            if (exists) {
+              // Update existing message (replace optimistic with real one)
+              return prev.map(m => 
+                (m.id === message.id || 
+                 (m.content === message.content && 
+                  Math.abs(new Date(m.sentAt || m.createdAt) - new Date(message.sentAt || message.createdAt)) < 2000))
+                  ? { ...message, isOptimistic: false }
+                  : m
+              ).sort((a, b) => {
+                const dateA = new Date(a.sentAt || a.createdAt || 0);
+                const dateB = new Date(b.sentAt || b.createdAt || 0);
+                return dateA - dateB;
+              });
+            }
+            // Add new message
+            return [...prev, { ...message, isOptimistic: false }].sort((a, b) => {
+              const dateA = new Date(a.sentAt || a.createdAt || 0);
+              const dateB = new Date(b.sentAt || b.createdAt || 0);
+              return dateA - dateB;
+            });
+          });
+        }
+        fetchInboxList(false);
+      };
+
+      const handleStatusUpdate = (data) => {
+        setMessages(prev => prev.map(msg => 
+          msg.id === data.messageId 
+            ? { ...msg, status: data.status, deliveredAt: data.deliveredAt, readAt: data.readAt }
+            : msg
+        ));
+      };
+
+      const handleTyping = (data) => {
+        setTypingContacts(prev => ({
+          ...prev,
+          [data.contactId]: data.isTyping
+        }));
+      };
+
+      const handleOnlineStatus = (data) => {
+        setOnlineContacts(prev => ({
+          ...prev,
+          [data.contactId]: { isOnline: data.isOnline, lastSeen: data.lastSeen }
+        }));
+      };
+
+      const handleInboxUpdate = () => {
+        fetchInboxList(false);
+      };
+
+      onSocketEvent('new-message', handleNewMessage);
+      onSocketEvent('message-status-update', handleStatusUpdate);
+      onSocketEvent('typing', handleTyping);
+      onSocketEvent('online-status', handleOnlineStatus);
+      onSocketEvent('inbox-update', handleInboxUpdate);
+
+      return () => {
+        offSocketEvent('new-message', handleNewMessage);
+        offSocketEvent('message-status-update', handleStatusUpdate);
+        offSocketEvent('typing', handleTyping);
+        offSocketEvent('online-status', handleOnlineStatus);
+        offSocketEvent('inbox-update', handleInboxUpdate);
+        disconnectSocket();
+      };
+    }
+  }, [user, selectedContact]);
+
   useEffect(() => {
     if (notificationDropdownOpen && isAuthenticated()) {
       fetchNotifications(true);
     }
   }, [notificationDropdownOpen]);
 
+  // Track last message timestamp for polling
+  const lastMessageTimeRef = useRef(null);
+  
+  // Track if we're currently fetching to prevent duplicate calls and blinking
+  const fetchingInboxRef = useRef(false);
+  const fetchingInboundRef = useRef(false);
+  const fetchingMessagesRef = useRef(false);
+  
   // Fetch inbox list
-  const fetchInboxList = async () => {
+  const fetchInboxList = async (showLoading = false) => {
+    // Prevent duplicate calls
+    if (fetchingInboxRef.current) {
+      return;
+    }
+    
     try {
-      setLoadingInbox(true);
+      fetchingInboxRef.current = true;
+      if (showLoading) {
+        setLoadingInbox(true);
+      }
       const data = await getInboxList();
-      setInboxList(data || []);
+      console.log('Inbox list fetched:', data?.length || 0, 'contacts');
+      
+      // Only update state if data actually changed (prevent unnecessary re-renders)
+      setInboxList(prev => {
+        const prevStr = JSON.stringify(prev);
+        const newStr = JSON.stringify(data || []);
+        if (prevStr !== newStr) {
+          return data || [];
+        }
+        return prev; // Return same reference if no change
+      });
     } catch (error) {
       console.error('Error fetching inbox list:', error);
+      // Only set empty array on error if we don't have data
+      setInboxList(prev => prev.length === 0 ? [] : prev);
     } finally {
-      setLoadingInbox(false);
+      if (showLoading) {
+        setLoadingInbox(false);
+      }
+      fetchingInboxRef.current = false;
+    }
+  };
+
+  // Fetch inbound messages from metaMessage API
+  const fetchInboundMessages = async () => {
+    // Prevent duplicate calls
+    if (fetchingInboundRef.current) {
+      return;
+    }
+    
+    try {
+      fetchingInboundRef.current = true;
+      const since = lastMessageTimeRef.current ? new Date(lastMessageTimeRef.current).toISOString() : null;
+      // Fetch more messages to ensure we get all new ones
+      const inboundMessages = await getInboundMessages(500, null, since); // Increased limit
+      
+      if (inboundMessages && inboundMessages.length > 0) {
+        // Update last message time
+        const latestMessage = inboundMessages[0];
+        if (latestMessage.received_at) {
+          lastMessageTimeRef.current = latestMessage.received_at;
+        }
+
+        // Refresh inbox list to show new messages (without loading state)
+        fetchInboxList(false);
+
+        // If we have a selected contact and new message is for them, refresh messages
+        if (selectedContact) {
+          const hasNewMessage = inboundMessages.some(msg => msg.phone === selectedContact.phone);
+          if (hasNewMessage) {
+            fetchMessages(selectedContact.phone);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching inbound messages:', error);
+    } finally {
+      fetchingInboundRef.current = false;
     }
   };
 
   useEffect(() => {
     if (!loading && isAuthenticated()) {
-      fetchInboxList();
-      // Refresh inbox list every 5 seconds
-      const interval = setInterval(fetchInboxList, 5000);
-      return () => clearInterval(interval);
+      // Initial load with loading state
+      fetchInboxList(true);
+      fetchInboundMessages();
+      
+      // Refresh inbox list every 15 seconds (background refresh, no loading state)
+      const inboxInterval = setInterval(() => fetchInboxList(false), 15000);
+      
+      // Poll for inbound messages every 10 seconds (reduced frequency)
+      const inboundInterval = setInterval(fetchInboundMessages, 10000);
+      
+      return () => {
+        clearInterval(inboxInterval);
+        clearInterval(inboundInterval);
+      };
     }
   }, [loading]);
 
-  // Fetch messages for selected contact
-  const fetchMessages = async (phone) => {
-    try {
-      setLoadingMessages(true);
-      const data = await getContactMessages(phone);
-      setMessages(data.messages || []);
-      setSelectedContact(data.contact);
-      
-      // Mark messages as read
-      try {
-        await markAsRead(phone);
-        // Update inbox list to reflect read status
-        fetchInboxList();
-      } catch (error) {
-        console.error('Error marking as read:', error);
+  // Fetch messages for selected contact - integrates data from Message, MetaMessage, and WebhookLogs
+  const fetchMessages = async (phone, showLoading = true) => {
+    if (!phone) {
+      console.error('No phone number provided to fetchMessages');
+      setLoadingMessages(false);
+      fetchingMessagesRef.current = false;
+      return;
+    }
+
+    // Prevent duplicate calls
+    if (fetchingMessagesRef.current) {
+      console.log('Already fetching messages, skipping duplicate call');
+      return;
+    }
+
+    // Set a timeout to ensure loading state is cleared even if fetch hangs
+    const timeoutId = setTimeout(() => {
+      if (fetchingMessagesRef.current) {
+        console.warn('fetchMessages timeout - clearing loading state');
+        setLoadingMessages(false);
+        fetchingMessagesRef.current = false;
       }
+    }, 30000); // 30 second timeout
+
+    try {
+      fetchingMessagesRef.current = true;
+      if (showLoading) {
+        setLoadingMessages(true);
+      }
+      let allMessages = [];
+      let contactData = null;
+      
+      // 1. Get messages from Message table (existing inbox messages)
+      // Handle case where contact might not exist yet
+      try {
+        const data = await getContactMessages(phone);
+        allMessages = data.messages || [];
+        contactData = data.contact;
+        if (data.contact) {
+          setSelectedContact(data.contact);
+        }
+      } catch (error) {
+        // Contact might not exist yet - that's okay, we'll still fetch meta messages
+        console.log('Contact not found in Message table, will fetch from meta_messages:', error.message);
+        // Set a basic contact object from phone number only if we don't have a selected contact
+        if (!selectedContact || selectedContact.phone !== phone) {
+          setSelectedContact({
+            phone: phone,
+            name: phone,
+            id: null
+          });
+        }
+      }
+      
+      // 2. Get all meta messages (inbound + outbound) for this phone
+      // Fetch all messages (no limit or very high limit)
+      try {
+        console.log('Fetching meta messages for phone:', phone);
+        const metaMessages = await getAllMetaMessages(phone, 10000); // Increased limit to fetch all
+        console.log('Meta messages received:', metaMessages?.length || 0, metaMessages);
+        
+        if (metaMessages && metaMessages.length > 0) {
+          // Convert meta messages to inbox message format
+          const convertedMetaMessages = metaMessages.map(metaMsg => ({
+            id: `meta_${metaMsg.id}`,
+            content: metaMsg.text || metaMsg.message_text || '',
+            type: metaMsg.direction === 'inbound' ? 'incoming' : 'outgoing',
+            status: metaMsg.status === 'received' ? 'delivered' : metaMsg.status,
+            sentAt: metaMsg.created_at,
+            createdAt: metaMsg.created_at,
+            metaMessageId: metaMsg.id,
+            messageType: metaMsg.message_type,
+            source: 'meta_message'
+          }));
+          
+          // Merge meta messages with existing messages
+          allMessages = [...allMessages, ...convertedMetaMessages];
+        }
+      } catch (error) {
+        console.error('Error fetching meta messages:', error);
+      }
+      
+      // 3. Get webhook logs for this phone (for debugging/display)
+      // Fetch all webhook logs (increased limit)
+      try {
+        console.log('Fetching webhook logs for phone:', phone);
+        const webhookLogs = await getWebhookLogs(1000, 'message_received', phone); // Increased limit to fetch all
+        console.log('Webhook logs received:', webhookLogs?.length || 0, webhookLogs);
+        
+        if (webhookLogs && webhookLogs.length > 0) {
+          // Convert webhook logs to message format (only for message_received events)
+          const convertedWebhookMessages = webhookLogs
+            .filter(log => {
+              try {
+                const payload = typeof log.payload === 'string' ? JSON.parse(log.payload) : log.payload;
+                return payload.event === 'message_received' && payload.from === phone;
+              } catch (e) {
+                return false;
+              }
+            })
+            .map(log => {
+              try {
+                const payload = typeof log.payload === 'string' ? JSON.parse(log.payload) : log.payload;
+                return {
+                  id: `webhook_${log.id}`,
+                  content: payload?.message?.text || '',
+                  type: 'incoming',
+                  status: 'delivered',
+                  sentAt: log.received_at || log.created_at,
+                  createdAt: log.received_at || log.created_at,
+                  webhookLogId: log.id,
+                  eventType: log.event_type,
+                  source: 'webhook_log',
+                  rawPayload: payload
+                };
+              } catch (e) {
+                return null;
+              }
+            })
+            .filter(msg => msg !== null);
+          
+          // Merge webhook messages with existing messages
+          allMessages = [...allMessages, ...convertedWebhookMessages];
+        }
+      } catch (error) {
+        console.error('Error fetching webhook logs:', error);
+      }
+      
+      // 4. Merge with existing optimistic messages (preserve messages that haven't been confirmed by server yet)
+      setMessages(prev => {
+        // Get optimistic messages (messages that are not yet confirmed by server)
+        // Only keep optimistic messages for the current contact
+        const optimisticMessages = prev.filter(m => 
+          (m.isOptimistic || m.source === 'optimistic') && 
+          (m.phone === phone || !m.phone) // Keep optimistic messages for current contact or messages without phone
+        );
+        
+        // Create a copy of allMessages to avoid mutating the outer variable
+        let processedMessages = allMessages.map((msg, index) => {
+          if (!msg.id) {
+            // Generate a unique ID if missing
+            const timestamp = new Date(msg.sentAt || msg.createdAt || Date.now()).getTime();
+            const source = msg.source || 'message';
+            return { ...msg, id: `${source}_${timestamp}_${index}` };
+          }
+          return msg;
+        });
+        
+        // Combine fetched messages with optimistic messages
+        const combinedMessages = [...processedMessages, ...optimisticMessages];
+        
+        // Remove duplicates and sort by timestamp
+        const uniqueMessages = [];
+        const seenIds = new Set();
+        
+        // Sort all messages by timestamp first
+        combinedMessages.sort((a, b) => {
+          const dateA = new Date(a.sentAt || a.createdAt || 0);
+          const dateB = new Date(b.sentAt || b.createdAt || 0);
+          return dateA - dateB;
+        });
+        
+        // Remove duplicates (prefer server messages over optimistic ones)
+        for (const msg of combinedMessages) {
+          // Use ID as primary key, fallback to content+timestamp if ID is still missing
+          const dedupKey = msg.id || `${msg.content}_${new Date(msg.sentAt || msg.createdAt || 0).getTime()}`;
+          
+          // If we've seen this ID, check if current message is from server (prefer server messages)
+          if (seenIds.has(dedupKey)) {
+            const existingIndex = uniqueMessages.findIndex(m => 
+              m.id === msg.id || 
+              (!m.id && !msg.id && m.content === msg.content && 
+               Math.abs(new Date(m.sentAt || m.createdAt) - new Date(msg.sentAt || msg.createdAt)) < 2000)
+            );
+            if (existingIndex >= 0) {
+              // Replace optimistic with server message if found
+              if (uniqueMessages[existingIndex].isOptimistic && !msg.isOptimistic) {
+                uniqueMessages[existingIndex] = msg;
+              }
+            }
+            continue;
+          }
+          
+          seenIds.add(dedupKey);
+          uniqueMessages.push(msg);
+        }
+        
+        console.log('Final merged messages count:', uniqueMessages.length, 'Optimistic:', optimisticMessages.length, 'All messages:', allMessages.length);
+        
+        // Always update state with the new messages (even if empty)
+        // This ensures loading state is cleared and UI shows "No messages" if needed
+        return uniqueMessages;
+      });
+      
+      // Mark messages as read (only if contact exists)
+      if (contactData) {
+        try {
+          await markAsRead(phone);
+          // Update inbox list to reflect read status (without loading state)
+          fetchInboxList(false);
+        } catch (error) {
+          console.error('Error marking as read:', error);
+        }
+      }
+      
+      console.log('Messages fetched successfully. Total:', allMessages.length);
     } catch (error) {
       console.error('Error fetching messages:', error);
+      // Set empty messages on error to prevent UI issues
+      setMessages(prev => {
+        // Only clear if we have no messages, otherwise keep existing
+        if (prev.length === 0) {
+          return [];
+        }
+        return prev;
+      });
     } finally {
+      // Clear timeout
+      clearTimeout(timeoutId);
+      // Always clear loading state and reset flag
       setLoadingMessages(false);
+      fetchingMessagesRef.current = false;
+      console.log('fetchMessages completed, loading cleared');
     }
   };
 
@@ -134,17 +523,57 @@ function Inbox() {
     }
   }, [messages]);
 
-  // Refresh messages when contact is selected
+  // Refresh messages when contact is selected and join/leave socket rooms
   useEffect(() => {
-    if (selectedContact) {
-      fetchMessages(selectedContact.phone);
-      // Refresh messages every 3 seconds for active chat
+    if (selectedContact?.phone) {
+      console.log('Contact selected, fetching messages for:', selectedContact.phone);
+      
+      // Reset loading state when switching contacts
+      setLoadingMessages(false);
+      fetchingMessagesRef.current = false;
+      
+      // Join contact room for real-time updates (only if contact has ID)
+      if (selectedContact.id) {
+        joinContactRoom(selectedContact.id);
+      }
+      
+      // Small delay to ensure state is reset before fetching
+      const fetchTimeout = setTimeout(() => {
+        // Fetch messages for the selected contact
+        fetchMessages(selectedContact.phone, true).catch(err => {
+          console.error('Error in fetchMessages:', err);
+          setLoadingMessages(false);
+          fetchingMessagesRef.current = false;
+        });
+      }, 100);
+      
+      // Refresh messages every 10 seconds for active chat (reduced frequency)
       const interval = setInterval(() => {
-        fetchMessages(selectedContact.phone);
-      }, 3000);
-      return () => clearInterval(interval);
+        // Only refresh if not already fetching
+        if (!fetchingMessagesRef.current && selectedContact?.phone) {
+          fetchMessages(selectedContact.phone, false).catch(err => {
+            console.error('Error in background fetchMessages:', err);
+            fetchingMessagesRef.current = false;
+          });
+        }
+      }, 10000);
+      
+      return () => {
+        clearTimeout(fetchTimeout);
+        clearInterval(interval);
+        // Leave contact room when switching contacts
+        if (selectedContact?.id) {
+          leaveContactRoom(selectedContact.id);
+        }
+        // Reset fetching flag when component unmounts or contact changes
+        fetchingMessagesRef.current = false;
+      };
+    } else {
+      // No contact selected, clear loading state
+      setLoadingMessages(false);
+      fetchingMessagesRef.current = false;
     }
-  }, [selectedContact?.phone]);
+  }, [selectedContact?.phone]); // Depend on phone number, which is always available
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -217,28 +646,71 @@ function Inbox() {
     e.preventDefault();
     if (!messageText.trim() || !selectedContact || sending) return;
 
+    // Stop typing indicator
+    handleTypingStop();
+
     const text = messageText.trim();
+    const phone = selectedContact.phone;
     setMessageText('');
     setSending(true);
 
     try {
-      const newMessage = await sendMessage(selectedContact.phone, text);
+      // Send via metaMessage API (WhatsApp API)
+      try {
+        await sendMetaMessage(phone, text);
+      } catch (metaError) {
+        console.error('Error sending via metaMessage API:', metaError);
+        // Continue to send via inbox API even if metaMessage fails
+        // This allows the message to be saved locally even if WhatsApp send fails
+      }
       
-      // Add message to local state immediately
-      setMessages(prev => [...prev, {
-        id: newMessage.id,
-        content: newMessage.content,
+      // Send via inbox API for database consistency (this creates contact if needed)
+      let newMessage = null;
+      try {
+        newMessage = await sendMessage(phone, text);
+      } catch (inboxError) {
+        console.error('Error sending via inbox API:', inboxError);
+        // If inbox API fails, still add message to local state
+        // The message was sent via WhatsApp, just not saved to our DB
+      }
+      
+      // Create optimistic message
+      const optimisticMessage = {
+        id: newMessage?.id || `temp_${Date.now()}`,
+        content: text,
         type: 'outgoing',
-        status: newMessage.status,
-        sentAt: newMessage.sentAt,
-        createdAt: newMessage.sentAt
-      }]);
+        status: newMessage?.status || 'sent',
+        sentAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        source: newMessage ? 'message' : 'optimistic',
+        isOptimistic: !newMessage // Mark as optimistic if not from server
+      };
 
-      // Refresh inbox list to update last message
-      fetchInboxList();
+      // Add message to local state immediately
+      setMessages(prev => {
+        // Check if message already exists (avoid duplicates)
+        const exists = prev.find(m => 
+          m.id === optimisticMessage.id || 
+          (m.content === text && Math.abs(new Date(m.sentAt || m.createdAt) - new Date(optimisticMessage.sentAt)) < 2000)
+        );
+        if (exists) return prev;
+        return [...prev, optimisticMessage];
+      });
+
+      // Refresh inbox list to update last message (without loading state)
+      fetchInboxList(false);
+      
+      // Refresh messages to get latest from server (with error handling and longer delay)
+      // Wait longer to ensure message is saved on server
+      setTimeout(() => {
+        fetchMessages(phone, false).catch(err => {
+          // Contact might not exist yet, that's okay
+          console.log('Could not refresh messages (contact may not exist yet):', err.message);
+        });
+      }, 1500); // Increased delay to 1.5 seconds
     } catch (error) {
       console.error('Error sending message:', error);
-      alert('Failed to send message. Please try again.');
+      alert(`Failed to send message: ${error.message || 'Please try again.'}`);
       setMessageText(text); // Restore message text on error
     } finally {
       setSending(false);
@@ -246,8 +718,184 @@ function Inbox() {
   };
 
   const handleContactSelect = (contact) => {
+    console.log('Contact clicked:', contact);
     setSelectedContact(contact);
     setMessages([]);
+    setCurrentPage(1);
+    setHasMoreMessages(true);
+    setMessageSearchQuery('');
+    setSearchResults([]);
+    
+    // The useEffect will handle joining contact room and fetching messages
+  };
+
+  // Typing indicator handlers
+  const handleTypingStart = useCallback(() => {
+    if (!selectedContact?.id || !user?.id) return;
+    
+    sendTypingStart(selectedContact.id, user.id);
+    
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    
+    typingTimeoutRef.current = setTimeout(() => {
+      sendTypingStop(selectedContact.id, user.id);
+    }, 3000);
+  }, [selectedContact, user]);
+
+  const handleTypingStop = useCallback(() => {
+    if (!selectedContact?.id || !user?.id) return;
+    
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    
+    sendTypingStop(selectedContact.id, user.id);
+  }, [selectedContact, user]);
+
+  // Handle message input with typing indicator
+  const handleMessageInputChange = (e) => {
+    setMessageText(e.target.value);
+    handleTypingStart();
+  };
+
+  // Delete message
+  const handleDeleteMessage = async (messageId) => {
+    try {
+      await deleteMessage(messageId);
+      setMessages(prev => prev.filter(msg => msg.id !== messageId));
+      setShowMessageMenu(null);
+    } catch (error) {
+      console.error('Error deleting message:', error);
+      alert('Failed to delete message: ' + error.message);
+    }
+  };
+
+  // Forward message
+  const handleForwardMessage = async (messageId) => {
+    try {
+      // Get all contacts for forwarding
+      const contacts = inboxList.filter(c => c.id !== selectedContact?.id);
+      if (contacts.length === 0) {
+        alert('No other contacts to forward to');
+        return;
+      }
+      
+      // For now, forward to first contact (can be enhanced with multi-select)
+      const contactIds = [contacts[0].id];
+      await forwardMessage(messageId, contactIds);
+      setShowForwardDialog(false);
+      setShowMessageMenu(null);
+      alert('Message forwarded successfully');
+    } catch (error) {
+      console.error('Error forwarding message:', error);
+      alert('Failed to forward message: ' + error.message);
+    }
+  };
+
+  // Add reaction
+  const handleAddReaction = async (messageId, emoji) => {
+    try {
+      const result = await addReaction(messageId, emoji);
+      setMessages(prev => prev.map(msg => 
+        msg.id === messageId ? { ...msg, reactions: result.reactions } : msg
+      ));
+      setShowMessageMenu(null);
+    } catch (error) {
+      console.error('Error adding reaction:', error);
+    }
+  };
+
+  // Search messages
+  const handleSearchMessages = async (query) => {
+    if (!query.trim() || !selectedContact?.id) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    try {
+      setIsSearching(true);
+      const result = await searchMessages(selectedContact.id, query);
+      setSearchResults(result.messages || []);
+    } catch (error) {
+      console.error('Error searching messages:', error);
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  // Load more messages (pagination)
+  const loadMoreMessages = async () => {
+    if (!selectedContact?.id || loadingMessages || !hasMoreMessages) return;
+
+    try {
+      setLoadingMessages(true);
+      const nextPage = currentPage + 1;
+      const result = await getPaginatedMessages(selectedContact.id, nextPage, 50);
+      
+      if (result.messages && result.messages.length > 0) {
+        setMessages(prev => [...result.messages, ...prev]);
+        setCurrentPage(nextPage);
+        setHasMoreMessages(result.pagination.page < result.pagination.pages);
+      } else {
+        setHasMoreMessages(false);
+      }
+    } catch (error) {
+      console.error('Error loading more messages:', error);
+      setHasMoreMessages(false);
+    } finally {
+      setLoadingMessages(false);
+    }
+  };
+
+  // Handle media upload
+  const handleMediaUpload = async (file) => {
+    if (!selectedContact?.id) return;
+
+    try {
+      setUploadingMedia(true);
+      const uploadResult = await uploadMedia(selectedContact.id, file);
+      
+      // Send media message
+      await sendMediaMessage(selectedContact.id, uploadResult.media, '');
+      
+      setShowMediaPicker(false);
+      fetchInboxList(false);
+      
+      // Refresh messages
+      setTimeout(() => {
+        fetchMessages(selectedContact.phone, false);
+      }, 500);
+    } catch (error) {
+      console.error('Error uploading media:', error);
+      alert('Failed to upload media: ' + error.message);
+    } finally {
+      setUploadingMedia(false);
+    }
+  };
+
+  // Update contact
+  const handleUpdateContact = async (updates) => {
+    if (!editingContact?.id) return;
+
+    try {
+      await updateContact(editingContact.id, updates);
+      setShowContactEditDialog(false);
+      setEditingContact(null);
+      fetchInboxList(true);
+      
+      // Update selected contact if it's the one being edited
+      if (selectedContact?.id === editingContact.id) {
+        const updatedContact = { ...selectedContact, ...updates };
+        setSelectedContact(updatedContact);
+      }
+    } catch (error) {
+      console.error('Error updating contact:', error);
+      alert('Failed to update contact: ' + error.message);
+    }
   };
 
   const filteredInboxList = inboxList.filter(contact => {
@@ -579,7 +1227,7 @@ function Inbox() {
                 <div className="divide-y divide-gray-100">
                   {filteredInboxList.map((contact) => (
                     <button
-                      key={contact.contactId}
+                      key={contact.contactId || `contact_${contact.phone}`}
                       onClick={() => handleContactSelect(contact)}
                       className={`w-full p-4 text-left hover:bg-gray-50 transition ${
                         selectedContact?.phone === contact.phone ? 'bg-blue-50 border-l-4 border-blue-600' : ''
@@ -627,34 +1275,145 @@ function Inbox() {
               <>
                 {/* Chat Header */}
                 <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
-                      <span className="text-white font-semibold">
-                        {selectedContact.name?.charAt(0).toUpperCase() || selectedContact.phone.charAt(0)}
-                      </span>
+                  <div className="flex items-center gap-3 flex-1">
+                    <div className="relative">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
+                        <span className="text-white font-semibold">
+                          {selectedContact.name?.charAt(0).toUpperCase() || selectedContact.phone.charAt(0)}
+                        </span>
+                      </div>
+                      {/* Online status indicator */}
+                      {onlineContacts[selectedContact.id]?.isOnline && (
+                        <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>
+                      )}
                     </div>
-                    <div>
-                      <p className="text-sm font-semibold text-gray-900">
-                        {selectedContact.name || selectedContact.phone}
-                      </p>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-gray-900">
+                          {selectedContact.name || selectedContact.phone}
+                        </p>
+                        {onlineContacts[selectedContact.id]?.isOnline ? (
+                          <span className="text-xs text-green-600">Online</span>
+                        ) : onlineContacts[selectedContact.id]?.lastSeen ? (
+                          <span className="text-xs text-gray-500">
+                            Last seen {formatTime(onlineContacts[selectedContact.id].lastSeen)}
+                          </span>
+                        ) : null}
+                      </div>
                       <p className="text-xs text-gray-500">{selectedContact.phone}</p>
                     </div>
                   </div>
+                  <div className="flex items-center gap-2">
+                    {/* Message search */}
+                    <button
+                      onClick={() => setIsSearching(!isSearching)}
+                      className="p-2 rounded-lg hover:bg-gray-100 transition"
+                      title="Search messages"
+                    >
+                      <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    </button>
+                    {/* Contact menu */}
+                    <button
+                      onClick={() => {
+                        setShowContactMenu(!showContactMenu);
+                        setEditingContact(selectedContact);
+                      }}
+                      className="p-2 rounded-lg hover:bg-gray-100 transition"
+                      title="Contact options"
+                    >
+                      <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                      </svg>
+                    </button>
+                  </div>
+                  
+                  {/* Contact menu dropdown */}
+                  {showContactMenu && (
+                    <div className="absolute right-4 top-16 bg-white rounded-lg shadow-xl border border-gray-200 z-50 w-48">
+                      <button
+                        onClick={() => {
+                          setShowContactEditDialog(true);
+                          setShowContactMenu(false);
+                        }}
+                        className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                        Edit Contact
+                      </button>
+                      <button
+                        onClick={async () => {
+                          try {
+                            const history = await getContactHistory(selectedContact.id);
+                            console.log('Contact history:', history);
+                            alert(`Total messages: ${history.stats.totalMessages}`);
+                          } catch (error) {
+                            console.error('Error fetching history:', error);
+                          }
+                          setShowContactMenu(false);
+                        }}
+                        className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        View History
+                      </button>
+                    </div>
+                  )}
                 </div>
+
+                {/* Message search bar */}
+                {isSearching && (
+                  <div className="bg-white border-b border-gray-200 px-6 py-3">
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="Search in conversation..."
+                        value={messageSearchQuery}
+                        onChange={(e) => {
+                          setMessageSearchQuery(e.target.value);
+                          handleSearchMessages(e.target.value);
+                        }}
+                        className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                      />
+                      <svg className="absolute left-3 top-2.5 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                      <button
+                        onClick={() => {
+                          setIsSearching(false);
+                          setMessageSearchQuery('');
+                          setSearchResults([]);
+                        }}
+                        className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Typing indicator */}
+                {typingContacts[selectedContact.id] && (
+                  <div className="bg-white border-b border-gray-200 px-6 py-2">
+                    <p className="text-sm text-gray-500 italic">
+                      {selectedContact.name || selectedContact.phone} is typing...
+                    </p>
+                  </div>
+                )}
 
                 {/* Messages Area */}
                 <div
                   ref={chatContainerRef}
                   className="flex-1 overflow-y-auto p-6 space-y-4"
                 >
-                  {loadingMessages ? (
-                    <div className="flex items-center justify-center h-full">
-                      <div className="text-center">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
-                        <p className="mt-2 text-sm text-gray-500">Loading messages...</p>
-                      </div>
-                    </div>
-                  ) : messages.length === 0 ? (
+                  {messages.length === 0 ? (
                     <div className="flex items-center justify-center h-full">
                       <div className="text-center">
                         <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -665,38 +1424,186 @@ function Inbox() {
                       </div>
                     </div>
                   ) : (
-                    messages.map((message) => (
-                      <div
-                        key={message.id}
-                        className={`flex ${message.type === 'outgoing' ? 'justify-end' : 'justify-start'}`}
-                      >
-                        <div
-                          className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
-                            message.type === 'outgoing'
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-white text-gray-900 border border-gray-200'
-                          }`}
-                        >
-                          <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
-                          <div className={`flex items-center justify-end gap-1 mt-1 ${
-                            message.type === 'outgoing' ? 'text-blue-100' : 'text-gray-500'
-                          }`}>
-                            <p className="text-xs">{formatMessageTime(message.sentAt || message.createdAt)}</p>
-                            {message.type === 'outgoing' && (
-                              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                                {message.status === 'read' ? (
-                                  <path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" />
-                                ) : message.status === 'delivered' ? (
-                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                ) : (
-                                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                )}
-                              </svg>
-                            )}
+                    <InfiniteScroll
+                      dataLength={messages.length}
+                      next={loadMoreMessages}
+                      hasMore={hasMoreMessages}
+                      loader={null}
+                      inverse={false}
+                      scrollableTarget={chatContainerRef.current}
+                    >
+                      {messages.map((message, index) => {
+                        // Ensure key is always unique
+                        const messageKey = message.id || `msg_${message.source || 'unknown'}_${index}_${message.sentAt || message.createdAt || Date.now()}`;
+                        const isSelected = selectedMessage === message.id;
+                        return (
+                          <div
+                            key={messageKey}
+                            className={`flex ${message.type === 'outgoing' ? 'justify-end' : 'justify-start'} group relative`}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              setSelectedMessage(message.id);
+                              setShowMessageMenu(message.id);
+                            }}
+                          >
+                            <div
+                              className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg relative ${
+                                message.type === 'outgoing'
+                                  ? 'bg-blue-600 text-white'
+                                  : 'bg-white text-gray-900 border border-gray-200'
+                              }`}
+                            >
+                              {/* Reply indicator */}
+                              {message.replyToId && (
+                                <div className={`text-xs mb-2 pb-2 border-b ${
+                                  message.type === 'outgoing' ? 'border-blue-400 text-blue-100' : 'border-gray-300 text-gray-500'
+                                }`}>
+                                  Replying to message
+                                </div>
+                              )}
+
+                              {/* Forwarded indicator */}
+                              {message.forwardedFrom && (
+                                <div className={`text-xs mb-2 pb-2 border-b ${
+                                  message.type === 'outgoing' ? 'border-blue-400 text-blue-100' : 'border-gray-300 text-gray-500'
+                                }`}>
+                                  Forwarded
+                                </div>
+                              )}
+
+                              {/* Media display */}
+                              {message.mediaType && message.mediaType !== 'text' && message.mediaUrl && (
+                                <div className="mb-2">
+                                  {message.mediaType === 'image' && (
+                                    <img 
+                                      src={`http://localhost:5000${message.mediaUrl}`} 
+                                      alt="Message media" 
+                                      className="max-w-full rounded-lg cursor-pointer"
+                                      onClick={() => window.open(`http://localhost:5000${message.mediaUrl}`, '_blank')}
+                                    />
+                                  )}
+                                  {message.mediaType === 'video' && (
+                                    <video 
+                                      src={`http://localhost:5000${message.mediaUrl}`} 
+                                      controls 
+                                      className="max-w-full rounded-lg"
+                                    />
+                                  )}
+                                  {message.mediaType === 'audio' && (
+                                    <audio 
+                                      src={`http://localhost:5000${message.mediaUrl}`} 
+                                      controls 
+                                      className="w-full"
+                                    />
+                                  )}
+                                  {message.mediaType === 'document' && (
+                                    <a 
+                                      href={`http://localhost:5000${message.mediaUrl}`} 
+                                      download
+                                      className="flex items-center gap-2 p-2 bg-gray-100 rounded"
+                                    >
+                                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                      </svg>
+                                      <span className="text-sm">{message.mediaFilename || 'Document'}</span>
+                                    </a>
+                                  )}
+                                </div>
+                              )}
+
+                              <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
+                              
+                              {/* Reactions */}
+                              {message.reactions && message.reactions.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-2">
+                                  {message.reactions.map((reaction, idx) => (
+                                    <span 
+                                      key={idx}
+                                      className="px-2 py-1 bg-gray-200 rounded-full text-xs"
+                                      title={`${reaction.emoji} by user ${reaction.userId}`}
+                                    >
+                                      {reaction.emoji}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+
+                              <div className={`flex items-center justify-between gap-2 mt-1 ${
+                                message.type === 'outgoing' ? 'text-blue-100' : 'text-gray-500'
+                              }`}>
+                                <p className="text-xs">{formatMessageTime(message.sentAt || message.createdAt)}</p>
+                                <div className="flex items-center gap-1">
+                                  {message.type === 'outgoing' && (
+                                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                      {message.status === 'read' ? (
+                                        <path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" />
+                                      ) : message.status === 'delivered' ? (
+                                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                      ) : (
+                                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                      )}
+                                    </svg>
+                                  )}
+                                  {/* Message menu button */}
+                                  <button
+                                    onClick={() => {
+                                      setSelectedMessage(message.id);
+                                      setShowMessageMenu(showMessageMenu === message.id ? null : message.id);
+                                    }}
+                                    className="opacity-0 group-hover:opacity-100 transition p-1 hover:bg-black/10 rounded"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Message menu */}
+                              {showMessageMenu === message.id && (
+                                <div className="absolute right-0 top-full mt-1 bg-white rounded-lg shadow-xl border border-gray-200 z-50 w-48">
+                                  <button
+                                    onClick={() => {
+                                      const emoji = prompt('Enter emoji reaction:');
+                                      if (emoji) handleAddReaction(message.id, emoji);
+                                    }}
+                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                  >
+                                    <span>😀</span>
+                                    Add Reaction
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setShowForwardDialog(true);
+                                      setSelectedMessage(message.id);
+                                    }}
+                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                    </svg>
+                                    Forward
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      if (window.confirm('Delete this message?')) {
+                                        handleDeleteMessage(message.id);
+                                      }
+                                    }}
+                                    className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                    Delete
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      </div>
-                    ))
+                        );
+                      })}
+                    </InfiniteScroll>
                   )}
                   <div ref={messagesEndRef} />
                 </div>
@@ -704,10 +1611,39 @@ function Inbox() {
                 {/* Message Input */}
                 <div className="bg-white border-t border-gray-200 px-6 py-4">
                   <form onSubmit={handleSendMessage} className="flex items-center gap-3">
+                    {/* Media picker button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMediaPicker(!showMediaPicker);
+                        fileInputRef.current?.click();
+                      }}
+                      className="p-2 text-gray-600 hover:text-blue-600 hover:bg-gray-100 rounded-lg transition"
+                      title="Attach media"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                      </svg>
+                    </button>
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      className="hidden"
+                      accept="image/*,video/*,audio/*,.pdf,.doc,.docx"
+                      onChange={(e) => {
+                        const file = e.target.files[0];
+                        if (file) {
+                          handleMediaUpload(file);
+                        }
+                        e.target.value = ''; // Reset input
+                      }}
+                    />
+                    
                     <input
                       type="text"
                       value={messageText}
-                      onChange={(e) => setMessageText(e.target.value)}
+                      onChange={handleMessageInputChange}
+                      onBlur={handleTypingStop}
                       placeholder="Type a message..."
                       className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
                       disabled={sending}
@@ -732,6 +1668,16 @@ function Inbox() {
                       )}
                     </button>
                   </form>
+                  
+                  {/* Upload progress */}
+                  {uploadingMedia && (
+                    <div className="mt-2">
+                      <div className="flex items-center gap-2 text-sm text-gray-600">
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                        <span>Uploading media...</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </>
             ) : (
@@ -748,6 +1694,139 @@ function Inbox() {
           </div>
         </div>
       </div>
+
+      {/* Contact Edit Dialog */}
+      {showContactEditDialog && editingContact && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold mb-4">Edit Contact</h3>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const formData = new FormData(e.target);
+              handleUpdateContact({
+                name: formData.get('name'),
+                email: formData.get('email'),
+                notes: formData.get('notes'),
+                tags: formData.get('tags')?.split(',').map(t => t.trim()).filter(t => t) || []
+              });
+            }}>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                  <input
+                    type="text"
+                    name="name"
+                    defaultValue={editingContact.name}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <input
+                    type="email"
+                    name="email"
+                    defaultValue={editingContact.email || ''}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                  <textarea
+                    name="notes"
+                    defaultValue={editingContact.notes || ''}
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Tags (comma-separated)</label>
+                  <input
+                    type="text"
+                    name="tags"
+                    defaultValue={Array.isArray(editingContact.tags) ? editingContact.tags.join(', ') : ''}
+                    placeholder="tag1, tag2, tag3"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowContactEditDialog(false);
+                    setEditingContact(null);
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                >
+                  Save
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Forward Message Dialog */}
+      {showForwardDialog && selectedMessage && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold mb-4">Forward Message</h3>
+            <div className="max-h-64 overflow-y-auto mb-4">
+              {inboxList.filter(c => c.id !== selectedContact?.id).map(contact => (
+                <label key={contact.id} className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded cursor-pointer">
+                  <input
+                    type="checkbox"
+                    value={contact.id}
+                    className="rounded"
+                  />
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
+                      <span className="text-white text-xs font-semibold">
+                        {contact.name?.charAt(0).toUpperCase() || contact.phone.charAt(0)}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">{contact.name || contact.phone}</p>
+                      <p className="text-xs text-gray-500">{contact.phone}</p>
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowForwardDialog(false);
+                  setSelectedMessage(null);
+                }}
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const checkboxes = document.querySelectorAll('input[type="checkbox"]:checked');
+                  const contactIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
+                  if (contactIds.length > 0) {
+                    await handleForwardMessage(selectedMessage);
+                  } else {
+                    alert('Please select at least one contact');
+                  }
+                }}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+              >
+                Forward
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

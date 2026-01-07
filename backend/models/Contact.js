@@ -48,6 +48,23 @@ const Contact = sequelize.define('Contact', {
   userId: {
     type: DataTypes.INTEGER,
     allowNull: false
+  },
+  // Additional contact features
+  avatar: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  isOnline: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  lastSeen: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  isTyping: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   }
 }, {
   timestamps: true

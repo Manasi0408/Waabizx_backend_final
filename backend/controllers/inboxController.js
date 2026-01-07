@@ -1,36 +1,49 @@
-const { Contact, Message, sequelize } = require('../models');
+const { Contact, Message, MetaMessage, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const aisensyService = require('../services/aisensyService');
 
 // Get inbox chat list - one row per contact with last message and unread count
+// Includes contacts from Message table AND meta_messages table
 exports.getInboxList = async (req, res) => {
   try {
     const userId = req.user.id;
     const contactTableName = Contact.tableName;
     const messageTableName = Message.tableName;
+    const metaMessageTableName = MetaMessage.tableName;
 
-    // Get all contacts that have messages, with their last message and unread count
+    // Get all contacts that have messages in Message table OR meta_messages table
     const inboxList = await sequelize.query(`
-      SELECT 
+      SELECT DISTINCT
         c.id as contactId,
         c.phone,
         c.name,
         c.email,
         c.status as contactStatus,
         c.lastContacted,
-        (
-          SELECT m.content 
-          FROM \`${messageTableName}\` m 
-          WHERE m.contactId = c.id 
-          ORDER BY m.sentAt DESC 
-          LIMIT 1
+        COALESCE(
+          (SELECT m.content 
+           FROM \`${messageTableName}\` m 
+           WHERE m.contactId = c.id 
+           ORDER BY m.sentAt DESC 
+           LIMIT 1),
+          (SELECT mm.message_text 
+           FROM \`${metaMessageTableName}\` mm 
+           WHERE mm.phone = c.phone 
+           ORDER BY mm.created_at DESC 
+           LIMIT 1),
+          ''
         ) as lastMessage,
-        (
-          SELECT m.sentAt 
-          FROM \`${messageTableName}\` m 
-          WHERE m.contactId = c.id 
-          ORDER BY m.sentAt DESC 
-          LIMIT 1
+        COALESCE(
+          (SELECT m.sentAt 
+           FROM \`${messageTableName}\` m 
+           WHERE m.contactId = c.id 
+           ORDER BY m.sentAt DESC 
+           LIMIT 1),
+          (SELECT mm.created_at 
+           FROM \`${metaMessageTableName}\` mm 
+           WHERE mm.phone = c.phone 
+           ORDER BY mm.created_at DESC 
+           LIMIT 1)
         ) as lastMessageTime,
         (
           SELECT COUNT(*) 
@@ -41,10 +54,17 @@ exports.getInboxList = async (req, res) => {
         ) as unreadCount
       FROM \`${contactTableName}\` c
       WHERE c.userId = :userId
-        AND EXISTS (
-          SELECT 1 
-          FROM \`${messageTableName}\` m 
-          WHERE m.contactId = c.id
+        AND (
+          EXISTS (
+            SELECT 1 
+            FROM \`${messageTableName}\` m 
+            WHERE m.contactId = c.id
+          )
+          OR EXISTS (
+            SELECT 1 
+            FROM \`${metaMessageTableName}\` mm 
+            WHERE mm.phone = c.phone
+          )
         )
       ORDER BY lastMessageTime DESC
     `, {
@@ -52,8 +72,40 @@ exports.getInboxList = async (req, res) => {
       type: sequelize.QueryTypes.SELECT
     });
 
+    // Also get contacts from meta_messages that don't have a Contact record yet
+    const metaMessagesContacts = await sequelize.query(`
+      SELECT DISTINCT
+        NULL as contactId,
+        mm.phone,
+        mm.phone as name,
+        NULL as email,
+        'active' as contactStatus,
+        MAX(mm.created_at) as lastContacted,
+        (SELECT mm2.message_text 
+         FROM \`${metaMessageTableName}\` mm2 
+         WHERE mm2.phone = mm.phone 
+         ORDER BY mm2.created_at DESC 
+         LIMIT 1) as lastMessage,
+        MAX(mm.created_at) as lastMessageTime,
+        0 as unreadCount
+      FROM \`${metaMessageTableName}\` mm
+      WHERE NOT EXISTS (
+        SELECT 1 
+        FROM \`${contactTableName}\` c 
+        WHERE c.phone = mm.phone AND c.userId = :userId
+      )
+      GROUP BY mm.phone
+      ORDER BY lastMessageTime DESC
+    `, {
+      replacements: { userId },
+      type: sequelize.QueryTypes.SELECT
+    });
+
+    // Combine both lists
+    const allContacts = [...inboxList, ...metaMessagesContacts];
+
     // Format the response
-    const formattedList = inboxList.map(item => ({
+    const formattedList = allContacts.map(item => ({
       contactId: item.contactId,
       phone: item.phone,
       name: item.name || item.phone,
@@ -65,9 +117,26 @@ exports.getInboxList = async (req, res) => {
       unreadCount: parseInt(item.unreadCount) || 0
     }));
 
+    // Remove duplicates by phone (keep the one with contactId if available)
+    const uniqueContacts = [];
+    const seenPhones = new Set();
+    for (const contact of formattedList) {
+      if (!seenPhones.has(contact.phone)) {
+        seenPhones.add(contact.phone);
+        uniqueContacts.push(contact);
+      }
+    }
+
+    // Sort by lastMessageTime
+    uniqueContacts.sort((a, b) => {
+      const timeA = a.lastMessageTime ? new Date(a.lastMessageTime).getTime() : 0;
+      const timeB = b.lastMessageTime ? new Date(b.lastMessageTime).getTime() : 0;
+      return timeB - timeA;
+    });
+
     res.json({
       success: true,
-      inbox: formattedList
+      inbox: uniqueContacts
     });
   } catch (error) {
     console.error('Error fetching inbox list:', error);
@@ -83,7 +152,17 @@ exports.getInboxList = async (req, res) => {
 exports.getContactMessages = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { phone } = req.params;
+    // Decode phone number - handle both encoded and non-encoded formats
+    let phone = req.params.phone;
+    try {
+      // Try decoding (in case it's encoded)
+      phone = decodeURIComponent(phone);
+    } catch (e) {
+      // If decoding fails, use as-is
+      phone = req.params.phone;
+    }
+    // Also handle %2B which is encoded +
+    phone = phone.replace(/%2B/g, '+');
 
     // Find contact by phone and userId
     const contact = await Contact.findOne({
@@ -220,7 +299,17 @@ exports.sendMessage = async (req, res) => {
 exports.markAsRead = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { phone } = req.params;
+    // Decode phone number - handle both encoded and non-encoded formats
+    let phone = req.params.phone;
+    try {
+      // Try decoding (in case it's encoded)
+      phone = decodeURIComponent(phone);
+    } catch (e) {
+      // If decoding fails, use as-is
+      phone = req.params.phone;
+    }
+    // Also handle %2B which is encoded +
+    phone = phone.replace(/%2B/g, '+');
 
     // Find contact by phone and userId
     const contact = await Contact.findOne({

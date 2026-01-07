@@ -24,6 +24,11 @@ const server = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
+// Initialize Socket.IO for real-time updates
+const socketService = require('./services/socketService');
+socketService.initializeSocket(server);
+console.log('✅ Socket.IO initialized');
+
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled Rejection:', err);

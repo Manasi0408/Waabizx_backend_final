@@ -17,6 +17,9 @@ const metaMessageRoutes = require('./routes/metaMessageRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const inboxRoutes = require('./routes/inboxRoutes');
+const messageRoutes = require('./routes/messageRoutes');
+const contactManagementRoutes = require('./routes/contactManagementRoutes');
+const mediaRoutes = require('./routes/mediaRoutes');
 
 // Initialize Express app
 const app = express();
@@ -34,6 +37,9 @@ app.use(express.urlencoded({
   extended: true, 
   limit: '10mb' 
 }));
+
+// Serve uploaded files
+app.use('/uploads', express.static('uploads'));
 
 // Security middleware - Configure helmet to not block requests
 app.use(helmet({
@@ -56,6 +62,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/contacts', contactRoutes);
+app.use('/api/contact-management', contactManagementRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/templates', templateRoutes);
 app.use("/api/settings", settingRoutes);
@@ -64,6 +71,9 @@ app.use('/messages', metaMessageRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/inbox', inboxRoutes);
+app.use('/api/messages', messageRoutes);
+app.use('/api/contact-management', contactManagementRoutes);
+app.use('/api/media', mediaRoutes);
 
 // 404 handler
 app.use((req, res) => {
