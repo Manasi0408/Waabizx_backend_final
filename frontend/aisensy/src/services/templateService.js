@@ -173,3 +173,68 @@ export const deleteTemplate = async (templateId) => {
   }
 };
 
+// Create template and submit to Meta API
+export const createMetaTemplate = async (templateData) => {
+  try {
+    const token = getToken();
+    if (!token) {
+      throw new Error('No token found');
+    }
+
+    const response = await fetch(`${API_URL}/templates/create`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(templateData)
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || data.message || 'Failed to create template');
+    }
+
+    if (data.success) {
+      return data;
+    }
+
+    throw new Error(data.message || 'Failed to create template');
+  } catch (error) {
+    throw error;
+  }
+};
+
+// Get templates from Meta API
+export const getMetaTemplates = async () => {
+  try {
+    const token = getToken();
+    if (!token) {
+      throw new Error('No token found');
+    }
+
+    const response = await fetch(`${API_URL}/templates/meta`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || data.message || 'Failed to fetch templates from Meta');
+    }
+
+    if (data.success) {
+      return data.templates || [];
+    }
+
+    throw new Error(data.message || 'Failed to fetch templates from Meta');
+  } catch (error) {
+    throw error;
+  }
+};
+

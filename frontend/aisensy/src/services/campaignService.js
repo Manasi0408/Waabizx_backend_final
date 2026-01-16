@@ -205,3 +205,99 @@ export const startCampaign = async (campaignId) => {
   }
 };
 
+// Pause campaign
+export const pauseCampaign = async (campaignId) => {
+  try {
+    const token = getToken();
+    if (!token) {
+      throw new Error('No token found');
+    }
+
+    const response = await fetch(`${API_URL}/campaigns/${campaignId}/pause`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || data.message || 'Failed to pause campaign');
+    }
+
+    if (data.success) {
+      return data;
+    }
+
+    throw new Error(data.message || 'Failed to pause campaign');
+  } catch (error) {
+    throw error;
+  }
+};
+
+// Resume campaign
+export const resumeCampaign = async (campaignId) => {
+  try {
+    const token = getToken();
+    if (!token) {
+      throw new Error('No token found');
+    }
+
+    const response = await fetch(`${API_URL}/campaigns/${campaignId}/resume`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || data.message || 'Failed to resume campaign');
+    }
+
+    if (data.success) {
+      return data;
+    }
+
+    throw new Error(data.message || 'Failed to resume campaign');
+  } catch (error) {
+    throw error;
+  }
+};
+
+// Get campaign audience logs
+export const getCampaignAudience = async (campaignId) => {
+  try {
+    const token = getToken();
+    if (!token) {
+      throw new Error('No token found');
+    }
+
+    const response = await fetch(`${API_URL}/campaigns/${campaignId}/audience`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || data.message || 'Failed to fetch campaign audience');
+    }
+
+    if (data.success) {
+      return data.audience || [];
+    }
+
+    throw new Error(data.message || 'Failed to fetch campaign audience');
+  } catch (error) {
+    throw error;
+  }
+};
+

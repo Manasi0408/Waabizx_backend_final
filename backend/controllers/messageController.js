@@ -1,6 +1,238 @@
-const { Message, Contact, User } = require('../models');
+const axios = require('axios');
+const { Message, Contact, User, InboxMessage } = require('../models');
 const { Op } = require('sequelize');
 const socketService = require('../services/socketService');
+
+// Send message via Meta API
+exports.sendMessage = async (req, res) => {
+  try {
+    // Get userId from authenticated user (middleware sets req.user)
+    const userId = req.user.id;
+    const { phone, message } = req.body;
+
+    // Validate input
+    if (!phone || !message) {
+      return res.json({ 
+        success: false, 
+        msg: "Missing required fields: phone, message" 
+      });
+    }
+
+    // Check environment variables (check multiple possible names)
+    const phoneNumberId = process.env.Phone_Number_ID;
+    const permanentToken = process.env.Whatsapp_Token;
+    
+    if (!phoneNumberId || !permanentToken) {
+      console.warn("⚠️  Missing Meta WhatsApp API credentials:");
+      console.warn("  PHONE_NUMBER_ID:", phoneNumberId ? "✓ Found" : "✗ Missing");
+      console.warn("  PERMANENT_TOKEN:", permanentToken ? "✓ Found" : "✗ Missing");
+      console.warn("\n📝 To enable message sending, add these to your .env file:");
+      console.warn("  PHONE_NUMBER_ID=your_phone_number_id");
+      console.warn("  PERMANENT_TOKEN=your_permanent_access_token");
+      console.warn("\n💡 You can still test the endpoint structure without these credentials.");
+      console.warn("   The message will be saved to the database but not sent via WhatsApp.");
+      
+      // Still allow the request to proceed - save to DB but mark as failed
+      // This allows testing the endpoint structure even without API credentials
+      // Find or create contact
+      let contact = await Contact.findOne({ where: { phone, userId } });
+      if (!contact) {
+        contact = await Contact.create({
+          userId,
+          phone,
+          name: phone,
+          status: 'active'
+        });
+      }
+
+      // Save message with failed status (API credentials missing)
+      const saved = await InboxMessage.create({
+        contactId: contact.id,
+        userId,
+        direction: "outgoing",
+        message,
+        type: "text",
+        status: "failed",
+        timestamp: new Date()
+      });
+
+      return res.json({ 
+        success: false, 
+        msg: "API credentials not configured. Message saved but not sent.",
+        data: saved,
+        warning: {
+          PHONE_NUMBER_ID: phoneNumberId ? "Found" : "Missing",
+          PERMANENT_TOKEN: permanentToken ? "Found" : "Missing",
+          message: "Add credentials to .env file to enable actual message sending"
+        }
+      });
+    }
+
+    const contact = await Contact.findOne({ where: { phone, userId } });
+
+    if (!contact) {
+      return res.json({ success: false, msg: "Contact not found" });
+    }
+
+    // Send via Meta API (works for both verified and non-verified numbers)
+    // For non-verified: Meta will enforce 24-hour restriction automatically
+    // For verified: No restriction, message will send
+    const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+    let response;
+    try {
+      response = await axios.post(
+        url,
+        {
+          messaging_product: "whatsapp",
+          to: phone,
+          type: "text",
+          text: { body: message }
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${permanentToken}`,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+    } catch (apiError) {
+      console.error("Meta API Error:", apiError?.response?.data || apiError.message);
+      const errorData = apiError?.response?.data?.error || {};
+      const errorCode = errorData.code;
+      const errorMsg = errorData.message || apiError.message || "Failed to send via Meta API";
+      
+      // Check if it's a 24-hour restriction error (for non-verified numbers)
+      // Error codes: 131047, 131026, or message contains "24 hour" or "session"
+      const is24HourError = errorCode === 131047 || 
+                           errorCode === 131026 ||
+                           errorMsg.toLowerCase().includes('24 hour') ||
+                           errorMsg.toLowerCase().includes('session') ||
+                           errorMsg.toLowerCase().includes('template required');
+      
+      // Save failed message
+      try {
+        await InboxMessage.create({
+          contactId: contact.id,
+          userId,
+          direction: "outgoing",
+          message,
+          type: "text",
+          status: "failed",
+          timestamp: new Date()
+        });
+      } catch (saveError) {
+        console.error("Error saving failed message:", saveError);
+      }
+
+      // Return specific message for 24-hour restriction
+      if (is24HourError) {
+        return res.json({ 
+          success: false,
+          sessionExpired: true,
+          msg: "24 hour session expired. User must send a message first, or use /send-template to send a template message.",
+          error: errorMsg,
+          errorCode: errorCode
+        });
+      }
+
+      // Other API errors
+      return res.json({ 
+        success: false, 
+        msg: `Meta API Error: ${errorMsg}`,
+        error: apiError?.response?.data || apiError.message
+      });
+    }
+
+    // Save in DB
+    let saved;
+    try {
+      saved = await InboxMessage.create({
+        contactId: contact.id,
+        userId,
+        direction: "outgoing",
+        message,
+        type: "text",
+        status: "sent",
+        waMessageId: response.data.messages?.[0]?.id || null,
+        timestamp: new Date()
+      });
+    } catch (dbError) {
+      console.error("Database Error saving message:", dbError);
+      return res.json({ 
+        success: false, 
+        msg: `Database Error: ${dbError.message}`,
+        error: dbError.message
+      });
+    }
+
+    // Update last contact time
+    try {
+      await contact.update({ lastContacted: new Date() });
+    } catch (updateError) {
+      console.error("Error updating contact:", updateError);
+      // Don't fail the request if this fails
+    }
+
+    // Emit socket event for real-time updates
+    try {
+      const messageData = {
+        id: saved.id,
+        contactId: contact.id,
+        phone: phone,
+        content: saved.message || saved.content || message, // Map message field to content
+        type: 'outgoing',
+        status: saved.status,
+        sentAt: saved.timestamp ? saved.timestamp.toISOString() : new Date().toISOString(),
+        createdAt: saved.createdAt ? saved.createdAt.toISOString() : new Date().toISOString(),
+        waMessageId: saved.waMessageId
+      };
+      console.log('📡 Emitting new-message socket event:', messageData);
+      socketService.emitToContact(contact.id, "new-message", messageData);
+      socketService.emitToUser(userId, "inbox-update", { contactId: contact.id });
+    } catch (socketError) {
+      console.error("Error emitting socket:", socketError);
+      // Don't fail the request if this fails
+    }
+
+    return res.json({ success: true, data: saved });
+  } catch (err) {
+    console.error("Outgoing Error:", err);
+    console.error("Error Stack:", err.stack);
+    
+    // Try to get contact for error handling
+    let contact = null;
+    try {
+      const phone = req.body?.phone;
+      const userId = req.user?.id;
+      if (phone && userId) {
+        contact = await Contact.findOne({ where: { phone, userId } });
+      }
+    } catch (contactError) {
+      console.error("Error finding contact for error log:", contactError);
+    }
+
+    // Save failed message
+    try {
+      await InboxMessage.create({
+        contactId: contact?.id || null,
+        userId: req.user?.id || null,
+        direction: "outgoing",
+        message: req.body?.message || "Unknown",
+        type: "text",
+        status: "failed",
+        timestamp: new Date()
+      });
+    } catch (saveError) {
+      console.error("Error saving failed message:", saveError);
+    }
+
+    return res.json({ 
+      success: false, 
+      msg: `Message send failed: ${err.message || "Unknown error"}`,
+      error: err.message
+    });
+  }
+};
 
 // Delete message (soft delete)
 exports.deleteMessage = async (req, res) => {
@@ -228,6 +460,247 @@ exports.searchMessages = async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message
+    });
+  }
+};
+
+// Send template message (for non-verified numbers or starting conversation)
+exports.sendTemplate = async (req, res) => {
+  try {
+    // Get userId from authenticated user
+    const userId = req.user.id;
+    const { phone, templateName, templateLanguage = "en_US", templateParams = [] } = req.body;
+
+    // Validate input
+    if (!phone || !templateName) {
+      return res.json({ 
+        success: false, 
+        msg: "Missing required fields: phone, templateName" 
+      });
+    }
+
+    // Check environment variables (check multiple possible names)
+    const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.Phone_Number_ID;
+    const TOKEN = process.env.WHATSAPP_TOKEN || process.env.Whatsapp_Token;
+    
+    if (!PHONE_NUMBER_ID || !TOKEN) {
+      return res.status(400).json({ 
+        success: false, 
+        msg: "API credentials not configured. Please set WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_TOKEN in .env file" 
+      });
+    }
+
+    // Find or create contact (for template messages, we can create new contacts)
+    let contact = await Contact.findOne({ where: { phone, userId } });
+
+    if (!contact) {
+      // Create new contact if doesn't exist (for template messages)
+      contact = await Contact.create({
+        userId,
+        phone,
+        name: phone, // Default name to phone number
+        status: 'active'
+      });
+      console.log('✅ New contact created for template (ID:', contact.id + ')');
+    }
+
+    // Build template payload
+    const templatePayload = {
+      messaging_product: "whatsapp",
+      to: phone,
+      type: "template",
+      template: {
+        name: templateName,
+        language: { code: templateLanguage }
+      }
+    };
+
+    // Add components only if templateParams provided
+    if (templateParams && templateParams.length > 0) {
+      templatePayload.template.components = [
+        {
+          type: "BODY",
+          parameters: templateParams.map(param => ({ 
+            type: "text", 
+            text: typeof param === 'string' ? param : String(param)
+          }))
+        }
+      ];
+    }
+
+    // Send via Meta API
+    const url = `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`;
+    let response;
+    try {
+      response = await axios.post(
+        url,
+        templatePayload,
+        {
+          headers: {
+            Authorization: `Bearer ${TOKEN}`
+          }
+        }
+      );
+      console.log('✅ Template sent via Meta API:', response.data);
+    } catch (apiError) {
+      console.error("Meta API Template Error:", apiError.response?.data || apiError);
+      
+      // Save failed message
+      try {
+        await InboxMessage.create({
+          contactId: contact.id,
+          userId,
+          direction: "outgoing",
+          message: `Template: ${templateName}`,
+          type: "text",
+          status: "failed",
+          timestamp: new Date()
+        });
+      } catch (saveError) {
+        console.error("Error saving failed template:", saveError);
+      }
+
+      return res.status(500).json({ 
+        success: false, 
+        message: "Failed to send template",
+        error: apiError.response?.data || apiError.message
+      });
+    }
+
+    // Extract WhatsApp message ID from response
+    const waMessageId = response.data.messages?.[0]?.id || null;
+
+    // Ensure table exists before saving
+    try {
+      await InboxMessage.sync({ alter: false });
+    } catch (syncError) {
+      console.error("⚠️  Warning: Could not sync InboxMessage table:", syncError.message);
+    }
+
+    // Save in DB - CRITICAL: Must save to track template sends
+    let savedMessage = null;
+    try {
+      console.log('💾 Attempting to save template to InboxMessages:', {
+        contactId: contact.id,
+        userId: userId,
+        templateName: templateName,
+        waMessageId: waMessageId
+      });
+
+      // Verify contact and user exist
+      if (!contact || !contact.id) {
+        throw new Error("Contact is invalid or missing ID");
+      }
+      if (!userId) {
+        throw new Error("User ID is missing");
+      }
+
+      savedMessage = await InboxMessage.create({
+        contactId: contact.id,
+        userId: userId,
+        direction: "outgoing",
+        message: `Template: ${templateName}`,
+        type: "text",
+        status: "sent",
+        waMessageId: waMessageId,
+        timestamp: new Date()
+      });
+      
+      console.log('✅ Template message saved to InboxMessages (ID:', savedMessage.id + ')');
+    } catch (dbError) {
+      console.error("❌ CRITICAL: Database Error saving template!");
+      console.error("Error Type:", dbError.name);
+      console.error("Error Message:", dbError.message);
+      console.error("Error Stack:", dbError.stack);
+      console.error("Attempted Data:", {
+        contactId: contact?.id,
+        userId: userId,
+        templateName: templateName,
+        waMessageId: waMessageId,
+        direction: "outgoing",
+        type: "text",
+        status: "sent"
+      });
+
+      // Check if it's a table doesn't exist error
+      if (dbError.message && (dbError.message.includes("doesn't exist") || dbError.message.includes("Unknown table"))) {
+        console.error("⚠️  TABLE MISSING: InboxMessages table doesn't exist!");
+        console.error("⚠️  Attempting to create table...");
+        try {
+          await InboxMessage.sync({ force: false, alter: true });
+          console.log("✅ Table created, retrying save...");
+          // Retry once
+          savedMessage = await InboxMessage.create({
+            contactId: contact.id,
+            userId: userId,
+            direction: "outgoing",
+            message: `Template: ${templateName}`,
+            type: "text",
+            status: "sent",
+            waMessageId: waMessageId,
+            timestamp: new Date()
+          });
+          console.log('✅ Template message saved to InboxMessages (ID:', savedMessage.id + ') after table creation');
+        } catch (retryError) {
+          console.error("❌ Failed to create table or retry save:", retryError.message);
+        }
+      }
+
+      // Check if it's a foreign key error
+      if (dbError.name === 'SequelizeForeignKeyConstraintError' || dbError.message.includes("foreign key")) {
+        console.error("⚠️  FOREIGN KEY ERROR: Contact or User doesn't exist!");
+        console.error("Contact ID:", contact?.id, "User ID:", userId);
+        console.error("Please verify Contact and User exist in database");
+      }
+
+      // Still return success since Meta API call succeeded
+      // But log the error prominently
+      if (!savedMessage) {
+        console.error("⚠️  WARNING: Template sent via Meta but NOT saved to database!");
+      }
+    }
+
+    // Update last contact time (template sent, now user can reply and /send will work)
+    try {
+      await contact.update({ lastContacted: new Date() });
+    } catch (updateError) {
+      console.error("Error updating contact:", updateError);
+    }
+
+    // Emit socket event for real-time updates
+    try {
+      if (savedMessage) {
+        const messageData = {
+          id: savedMessage.id,
+          contactId: contact.id,
+          phone: phone,
+          content: `Template: ${templateName}`,
+          type: 'outgoing',
+          status: savedMessage.status,
+          sentAt: savedMessage.timestamp ? savedMessage.timestamp.toISOString() : new Date().toISOString(),
+          createdAt: savedMessage.createdAt ? savedMessage.createdAt.toISOString() : new Date().toISOString(),
+          waMessageId: waMessageId
+        };
+        socketService.emitToContact(contact.id, "new-message", messageData);
+        socketService.emitToUser(userId, "inbox-update", { contactId: contact.id });
+      }
+    } catch (socketError) {
+      console.error("Error emitting socket:", socketError);
+    }
+
+    return res.json({
+      success: true,
+      msg: "Template sent successfully",
+      waMessageId: waMessageId,
+      saved: savedMessage ? true : false,
+      messageId: savedMessage?.id || null
+    });
+  } catch (error) {
+    console.error("Template Send Error:", error.response?.data || error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to send template",
+      error: error.response?.data || error.message
     });
   }
 };

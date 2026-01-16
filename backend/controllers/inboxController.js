@@ -1,6 +1,7 @@
-const { Contact, Message, MetaMessage, sequelize } = require('../models');
+const { Contact, Message, MetaMessage, InboxMessage, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const aisensyService = require('../services/aisensyService');
+const socketService = require('../services/socketService');
 
 // Get inbox chat list - one row per contact with last message and unread count
 // Includes contacts from Message table AND meta_messages table
@@ -273,6 +274,43 @@ exports.sendMessage = async (req, res) => {
     await contact.update({
       lastContacted: new Date()
     });
+
+    // Also save to InboxMessage for consistency
+    let inboxMessage = null;
+    try {
+      inboxMessage = await InboxMessage.create({
+        contactId: contact.id,
+        userId,
+        direction: 'outgoing',
+        message: text,
+        type: 'text',
+        status: sendResult ? 'sent' : 'failed',
+        timestamp: new Date()
+      });
+    } catch (inboxError) {
+      console.error('Error saving to InboxMessage:', inboxError);
+      // Continue even if this fails
+    }
+
+    // Emit socket event for real-time updates
+    try {
+      const messageData = {
+        id: inboxMessage?.id || message.id,
+        contactId: contact.id,
+        phone: phone,
+        content: text, // Use text content
+        type: 'outgoing',
+        status: message.status,
+        sentAt: message.sentAt ? message.sentAt.toISOString() : new Date().toISOString(),
+        createdAt: message.createdAt ? message.createdAt.toISOString() : new Date().toISOString()
+      };
+      console.log('📡 Emitting new-message socket event from inbox:', messageData);
+      socketService.emitToContact(contact.id, 'new-message', messageData);
+      socketService.emitToUser(userId, 'inbox-update', { contactId: contact.id });
+    } catch (socketError) {
+      console.error('Error emitting socket:', socketError);
+      // Don't fail the request if this fails
+    }
 
     res.json({
       success: true,

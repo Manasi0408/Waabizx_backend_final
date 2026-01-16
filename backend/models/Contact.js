@@ -49,25 +49,31 @@ const Contact = sequelize.define('Contact', {
     type: DataTypes.INTEGER,
     allowNull: false
   },
-  // Additional contact features
-  avatar: {
-    type: DataTypes.STRING,
-    allowNull: true
-  },
-  isOnline: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false
-  },
-  lastSeen: {
-    type: DataTypes.DATE,
-    allowNull: true
-  },
-  isTyping: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false
-  }
+  // Additional contact features (commented out - columns don't exist in DB yet)
+  // avatar: {
+  //   type: DataTypes.STRING,
+  //   allowNull: true
+  // },
+  // isOnline: {
+  //   type: DataTypes.BOOLEAN,
+  //   defaultValue: false
+  // },
+  // lastSeen: {
+  //   type: DataTypes.DATE,
+  //   allowNull: true
+  // },
+  // isTyping: {
+  //   type: DataTypes.BOOLEAN,
+  //   defaultValue: false
+  // }
 }, {
-  timestamps: true
+  timestamps: true,
+  // Exclude non-existent fields from default queries
+  defaultScope: {
+    attributes: {
+      exclude: [] // All defined fields are valid
+    }
+  }
 });
 
 module.exports = Contact;

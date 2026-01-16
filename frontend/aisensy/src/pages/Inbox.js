@@ -107,7 +107,16 @@ function Inbox() {
 
       // Set up socket event listeners
       const handleNewMessage = (message) => {
-        if (selectedContact && (message.contactId === selectedContact.id || message.phone === selectedContact.phone)) {
+        console.log('📨 Socket: new-message received', message);
+        
+        // Check if this message is for the currently selected contact
+        const isForSelectedContact = selectedContact && (
+          message.contactId === selectedContact.id || 
+          message.phone === selectedContact.phone ||
+          (selectedContact.phone && message.phone && selectedContact.phone.replace(/\D/g, '') === message.phone.replace(/\D/g, ''))
+        );
+
+        if (isForSelectedContact) {
           setMessages(prev => {
             // Check if message already exists (by ID or content+timestamp)
             const exists = prev.find(m => 
@@ -115,13 +124,15 @@ function Inbox() {
               (m.content === message.content && 
                Math.abs(new Date(m.sentAt || m.createdAt) - new Date(message.sentAt || message.createdAt)) < 2000)
             );
+            
             if (exists) {
               // Update existing message (replace optimistic with real one)
+              console.log('🔄 Updating existing message from socket');
               return prev.map(m => 
                 (m.id === message.id || 
                  (m.content === message.content && 
                   Math.abs(new Date(m.sentAt || m.createdAt) - new Date(message.sentAt || message.createdAt)) < 2000))
-                  ? { ...message, isOptimistic: false }
+                  ? { ...message, isOptimistic: false, source: 'socket' }
                   : m
               ).sort((a, b) => {
                 const dateA = new Date(a.sentAt || a.createdAt || 0);
@@ -129,20 +140,27 @@ function Inbox() {
                 return dateA - dateB;
               });
             }
+            
             // Add new message
-            return [...prev, { ...message, isOptimistic: false }].sort((a, b) => {
+            console.log('➕ Adding new message from socket');
+            return [...prev, { ...message, isOptimistic: false, source: 'socket' }].sort((a, b) => {
               const dateA = new Date(a.sentAt || a.createdAt || 0);
               const dateB = new Date(b.sentAt || b.createdAt || 0);
               return dateA - dateB;
             });
           });
+        } else {
+          console.log('📬 Message received for different contact, updating inbox list');
         }
+        
+        // Always refresh inbox list when new message arrives
         fetchInboxList(false);
       };
 
       const handleStatusUpdate = (data) => {
+        console.log('📊 Socket: message-status-update received', data);
         setMessages(prev => prev.map(msg => 
-          msg.id === data.messageId 
+          msg.id === data.messageId || msg.waMessageId === data.waMessageId
             ? { ...msg, status: data.status, deliveredAt: data.deliveredAt, readAt: data.readAt }
             : msg
         ));
@@ -655,26 +673,23 @@ function Inbox() {
     setSending(true);
 
     try {
-      // Send via metaMessage API (WhatsApp API)
-      try {
-        await sendMetaMessage(phone, text);
-      } catch (metaError) {
-        console.error('Error sending via metaMessage API:', metaError);
-        // Continue to send via inbox API even if metaMessage fails
-        // This allows the message to be saved locally even if WhatsApp send fails
-      }
-      
-      // Send via inbox API for database consistency (this creates contact if needed)
+      // Send via message API (WhatsApp API) - this will emit socket events
       let newMessage = null;
       try {
-        newMessage = await sendMessage(phone, text);
-      } catch (inboxError) {
-        console.error('Error sending via inbox API:', inboxError);
-        // If inbox API fails, still add message to local state
-        // The message was sent via WhatsApp, just not saved to our DB
+        const response = await sendMetaMessage(phone, text);
+        newMessage = response;
+        console.log('✅ Message sent via API:', newMessage);
+      } catch (metaError) {
+        console.error('Error sending via message API:', metaError);
+        // Still try inbox API as fallback
+        try {
+          newMessage = await sendMessage(phone, text);
+        } catch (inboxError) {
+          console.error('Error sending via inbox API:', inboxError);
+        }
       }
       
-      // Create optimistic message
+      // Create optimistic message (will be replaced by socket event if successful)
       const optimisticMessage = {
         id: newMessage?.id || `temp_${Date.now()}`,
         content: text,
@@ -682,32 +697,33 @@ function Inbox() {
         status: newMessage?.status || 'sent',
         sentAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
-        source: newMessage ? 'message' : 'optimistic',
-        isOptimistic: !newMessage // Mark as optimistic if not from server
+        source: 'optimistic',
+        isOptimistic: true,
+        phone: phone
       };
 
-      // Add message to local state immediately
+      // Add message to local state immediately (optimistic update)
       setMessages(prev => {
         // Check if message already exists (avoid duplicates)
         const exists = prev.find(m => 
           m.id === optimisticMessage.id || 
-          (m.content === text && Math.abs(new Date(m.sentAt || m.createdAt) - new Date(optimisticMessage.sentAt)) < 2000)
+          (m.content === text && 
+           m.isOptimistic && 
+           Math.abs(new Date(m.sentAt || m.createdAt) - new Date(optimisticMessage.sentAt)) < 2000)
         );
         if (exists) return prev;
-        return [...prev, optimisticMessage];
+        return [...prev, optimisticMessage].sort((a, b) => {
+          const dateA = new Date(a.sentAt || a.createdAt || 0);
+          const dateB = new Date(b.sentAt || b.createdAt || 0);
+          return dateA - dateB;
+        });
       });
 
       // Refresh inbox list to update last message (without loading state)
       fetchInboxList(false);
       
-      // Refresh messages to get latest from server (with error handling and longer delay)
-      // Wait longer to ensure message is saved on server
-      setTimeout(() => {
-        fetchMessages(phone, false).catch(err => {
-          // Contact might not exist yet, that's okay
-          console.log('Could not refresh messages (contact may not exist yet):', err.message);
-        });
-      }, 1500); // Increased delay to 1.5 seconds
+      // Note: Socket event will update the optimistic message with real data
+      // No need to manually refresh - socket will handle it
     } catch (error) {
       console.error('Error sending message:', error);
       alert(`Failed to send message: ${error.message || 'Please try again.'}`);

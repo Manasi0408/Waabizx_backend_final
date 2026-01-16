@@ -66,7 +66,8 @@ app.use('/api/contact-management', contactManagementRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/templates', templateRoutes);
 app.use("/api/settings", settingRoutes);
-app.use('/webhooks', metaWebhookRoutes);
+// Webhook endpoint - single clean route
+app.use('/webhook', metaWebhookRoutes);
 app.use('/messages', metaMessageRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/analytics', analyticsRoutes);

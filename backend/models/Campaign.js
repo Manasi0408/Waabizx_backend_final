@@ -19,8 +19,8 @@ const Campaign = sequelize.define('Campaign', {
     defaultValue: ''
   },
   status: {
-    type: DataTypes.ENUM('draft', 'scheduled', 'active', 'completed', 'paused'),
-    defaultValue: 'draft'
+    type: DataTypes.ENUM('PENDING', 'PROCESSING', 'COMPLETED', 'PAUSED', 'draft', 'scheduled', 'active', 'completed', 'paused'),
+    defaultValue: 'PENDING'
   },
   type: {
     type: DataTypes.ENUM('broadcast', 'automation', 'sequence'),
@@ -28,7 +28,19 @@ const Campaign = sequelize.define('Campaign', {
   },
   message: {
     type: DataTypes.TEXT,
-    allowNull: false
+    allowNull: true
+  },
+  template_name: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  template_language: {
+    type: DataTypes.STRING,
+    defaultValue: 'en_US'
+  },
+  schedule_time: {
+    type: DataTypes.DATE,
+    defaultValue: null
   },
   scheduledAt: {
     type: DataTypes.DATE,
@@ -42,7 +54,23 @@ const Campaign = sequelize.define('Campaign', {
     type: DataTypes.INTEGER,
     defaultValue: 0
   },
+  total: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0
+  },
+  sent: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0
+  },
   delivered: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0
+  },
+  read: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0
+  },
+  failed: {
     type: DataTypes.INTEGER,
     defaultValue: 0
   },

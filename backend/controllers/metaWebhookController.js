@@ -1,82 +1,309 @@
+require('dotenv').config();
 const { WebhookLog, MetaMessage, Contact, Message, User } = require('../models');
 const { Op } = require('sequelize');
 const socketService = require('../services/socketService');
 
+// VERIFY WEBHOOK (for WhatsApp/Meta webhook verification)
+exports.verifyWebhook = (req, res) => {
+  console.log('=== WEBHOOK VERIFICATION REQUEST ===');
+  console.log('Request URL:', req.url);
+  console.log('Request Method:', req.method);
+  console.log('Query Params:', req.query);
+  
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  // Check both VERIFY_TOKEN and Verify_Token (for compatibility)
+  const verifyToken = process.env.Verify_Token;
+  
+  console.log('Received mode:', mode);
+  console.log('Received token:', token);
+  console.log('Expected token:', verifyToken);
+  console.log('Challenge:', challenge);
+
+  if (mode === 'subscribe' && token === verifyToken) {
+    console.log('✅ Webhook Verified Successfully');
+    res.status(200).send(challenge);
+  } else {
+    console.log('❌ Webhook verification failed');
+    console.log('Mode check:', mode === 'subscribe' ? 'PASS' : 'FAIL');
+    console.log('Token check:', token === verifyToken ? 'PASS' : 'FAIL');
+    res.sendStatus(403);
+  }
+};
+
+// HANDLE INCOMING WEBHOOK (supports both Meta/WhatsApp and AiSensy formats)
 exports.handleWebhook = async (req, res) => {
   try {
     const payload = req.body;
 
+    console.log('\n========================================');
+    console.log('=== INCOMING WEBHOOK RECEIVED ===');
+    console.log('========================================');
+    console.log('Timestamp:', new Date().toISOString());
+    console.log('Webhook Payload:', JSON.stringify(payload, null, 2));
+
     // 🔹 1. Save raw webhook (for debugging & audit)
-    await WebhookLog.create({
-      event_type: payload.event || 'unknown',
+    const eventType = payload.event || (payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0] ? 'message_received' : 'unknown');
+    console.log('📋 Event Type:', eventType);
+    
+    const webhookLog = await WebhookLog.create({
+      event_type: eventType,
       payload: JSON.stringify(payload)
     });
+    console.log('✅ Webhook log saved to DB (ID:', webhookLog.id + ')');
 
-    // 🔹 2. Process incoming message
+    // 🔹 2. Handle Meta/WhatsApp webhook format (entry.changes.value format)
+    const entry = payload.entry?.[0]?.changes?.[0]?.value;
+    const messageObj = entry?.messages?.[0];
+    
+    if (messageObj) {
+      console.log('\n📱 Processing Meta/WhatsApp format webhook');
+      // Meta/WhatsApp format
+      const waId = entry?.contacts?.[0]?.wa_id;
+      const fromNumber = messageObj.from;
+      const text = messageObj.text?.body || 'Non-text message';
+      const timestamp = new Date(messageObj.timestamp * 1000);
+
+      console.log('📞 From Number:', fromNumber);
+      console.log('💬 Message Text:', text);
+      console.log('📅 Timestamp:', timestamp.toISOString());
+      console.log('🆔 WA ID:', waId || 'N/A');
+
+      if (fromNumber) {
+        // Save to MetaMessage
+        const metaMessage = await MetaMessage.create({
+          phone: fromNumber,
+          direction: 'inbound',
+          message_type: 'text',
+          message_text: text,
+          status: 'received'
+        });
+        console.log('✅ MetaMessage saved to DB (ID:', metaMessage.id + ')');
+
+        // Find or create contact
+        // First, try to find existing contact by phone number (across all users)
+        // This ensures we match the contact created when template was sent
+        console.log('\n🔍 Searching for contact with phone:', fromNumber);
+        let contact = await Contact.findOne({
+          where: {
+            phone: fromNumber
+          },
+          order: [['updatedAt', 'DESC']], // Get most recently updated contact
+          attributes: ['id', 'phone', 'name', 'email', 'status', 'tags', 'country', 'lastContacted', 'notes', 'userId', 'createdAt', 'updatedAt']
+        });
+
+        let userId;
+
+        if (contact) {
+          // Use the userId from existing contact
+          userId = contact.userId;
+          console.log('✅ Existing contact found!');
+          console.log('   Contact ID:', contact.id);
+          console.log('   User ID:', userId);
+          console.log('   Phone:', contact.phone);
+          console.log('   Name:', contact.name);
+          console.log('   Last Contacted:', contact.lastContacted);
+        } else {
+          console.log('⚠️ Contact not found, creating new one...');
+          // No contact found, create new one with first active user
+          const firstUser = await User.findOne({
+            where: { status: 'active' },
+            order: [['id', 'ASC']]
+          });
+
+          if (!firstUser) {
+            console.log('❌ ERROR: No active user found - cannot create contact');
+            console.log('   Message will not be saved to inbox');
+            return res.status(200).json({ success: true }); // Return success to webhook
+          }
+
+          userId = firstUser.id;
+          console.log('👤 Creating new contact with user (ID:', userId + ')');
+          
+          contact = await Contact.create({
+            userId: userId,
+            phone: fromNumber,
+            name: fromNumber, // Default name to phone number
+            status: 'active'
+          });
+          console.log('✅ New contact created!');
+          console.log('   Contact ID:', contact.id);
+          console.log('   User ID:', userId);
+        }
+
+          // Save message to Message table
+          console.log('\n💾 Saving message to database...');
+          const newMessage = await Message.create({
+            contactId: contact.id,
+            content: text,
+            type: 'incoming',
+            status: 'delivered',
+            sentAt: timestamp,
+            deliveredAt: timestamp
+          });
+          console.log('✅ Message saved to DB!');
+          console.log('   Message ID:', newMessage.id);
+          console.log('   Contact ID:', contact.id);
+          console.log('   Content:', text.substring(0, 50) + (text.length > 50 ? '...' : ''));
+
+          console.log('\n🔄 Updating contact lastContacted...');
+          await contact.update({
+            lastContacted: timestamp
+          });
+          console.log('✅ Contact lastContacted updated to:', timestamp.toISOString());
+
+          // Emit real-time update
+          console.log('\n📡 Emitting Socket.IO events...');
+          const messageData = {
+            id: newMessage.id,
+            contactId: contact.id,
+            phone: fromNumber, // Include phone for frontend matching
+            content: text,
+            type: 'incoming',
+            status: 'delivered',
+            sentAt: timestamp.toISOString(),
+            deliveredAt: timestamp.toISOString(),
+            createdAt: newMessage.createdAt ? newMessage.createdAt.toISOString() : new Date().toISOString()
+          };
+          
+          socketService.emitToContact(contact.id, 'new-message', messageData);
+          console.log('   ✅ Emitted: new-message to contact', contact.id);
+          
+          socketService.emitToUser(userId, 'inbox-update', {
+            contactId: contact.id,
+            lastMessage: text,
+            lastMessageTime: timestamp
+          });
+          console.log('   ✅ Emitted: inbox-update to user', userId);
+          
+          console.log('\n✅ All processing complete for Meta/WhatsApp format');
+          console.log('========================================\n');
+      }
+    }
+
+    // 🔹 3. Process AiSensy webhook format (event-based)
     if (payload.event === 'message_received') {
+      console.log('\n📱 Processing AiSensy format webhook');
       const phone = payload.from;
       const text = payload?.message?.text || '';
 
+      console.log('📞 From Number:', phone);
+      console.log('💬 Message Text:', text);
+
       if (phone) {
         // Save to MetaMessage for webhook tracking
-        await MetaMessage.create({
+        const metaMessage = await MetaMessage.create({
           phone,
           direction: 'inbound',
           message_type: 'text',
           message_text: text,
           status: 'received'
         });
+        console.log('✅ MetaMessage saved to DB (ID:', metaMessage.id + ')');
 
-        // 🔹 3. Find or create contact (associate with first active user for now)
-        // In production, you might want to use company_id or account_id from webhook payload
-        const firstUser = await User.findOne({
-          where: { status: 'active' },
-          order: [['id', 'ASC']]
+        // 🔹 3. Find or create contact
+        // First, try to find existing contact by phone number (across all users)
+        // This ensures we match the contact created when template was sent
+        console.log('\n🔍 Searching for contact with phone:', phone);
+        let contact = await Contact.findOne({
+          where: {
+            phone: phone
+          },
+          order: [['updatedAt', 'DESC']], // Get most recently updated contact
+          attributes: ['id', 'phone', 'name', 'email', 'status', 'tags', 'country', 'lastContacted', 'notes', 'userId', 'createdAt', 'updatedAt']
         });
 
-        if (firstUser) {
-          let contact = await Contact.findOne({
-            where: {
-              phone,
-              userId: firstUser.id
-            }
+        let userId;
+
+        if (contact) {
+          // Use the userId from existing contact
+          userId = contact.userId;
+          console.log('✅ Existing contact found!');
+          console.log('   Contact ID:', contact.id);
+          console.log('   User ID:', userId);
+          console.log('   Phone:', contact.phone);
+          console.log('   Name:', contact.name);
+          console.log('   Last Contacted:', contact.lastContacted);
+        } else {
+          console.log('⚠️ Contact not found, creating new one...');
+          // No contact found, create new one with first active user
+          const firstUser = await User.findOne({
+            where: { status: 'active' },
+            order: [['id', 'ASC']]
           });
 
-          // Create contact if doesn't exist
-          if (!contact) {
-            contact = await Contact.create({
-              userId: firstUser.id,
-              phone,
-              name: phone, // Default name to phone number
-              status: 'active'
-            });
+          if (!firstUser) {
+            console.log('❌ ERROR: No active user found - cannot create contact');
+            console.log('   Message will not be saved to inbox');
+            return res.status(200).json({ success: true }); // Return success to webhook
           }
 
+          userId = firstUser.id;
+          console.log('👤 Creating new contact with user (ID:', userId + ')');
+          
+          contact = await Contact.create({
+            userId: userId,
+            phone: phone,
+            name: phone, // Default name to phone number
+            status: 'active'
+          });
+          console.log('✅ New contact created!');
+          console.log('   Contact ID:', contact.id);
+          console.log('   User ID:', userId);
+        }
+
           // 🔹 4. Save message to Message table (for inbox)
+          console.log('\n💾 Saving message to database...');
           const newMessage = await Message.create({
             contactId: contact.id,
             content: text,
             type: 'incoming',
             status: 'delivered', // Incoming messages are considered delivered
             sentAt: new Date(),
-            deliveredAt: new Date(),
-            mediaType: payload?.message?.type || 'text',
-            mediaUrl: payload?.message?.image?.url || payload?.message?.video?.url || payload?.message?.audio?.url || payload?.message?.document?.url || null
+            deliveredAt: new Date()
+            // Removed mediaType and mediaUrl - columns don't exist in DB
           });
+          console.log('✅ Message saved to DB!');
+          console.log('   Message ID:', newMessage.id);
+          console.log('   Contact ID:', contact.id);
+          console.log('   Content:', text.substring(0, 50) + (text.length > 50 ? '...' : ''));
 
           // 🔹 5. Update contact's lastContacted
+          console.log('\n🔄 Updating contact lastContacted...');
           await contact.update({
             lastContacted: new Date()
           });
+          console.log('✅ Contact lastContacted updated to:', new Date().toISOString());
 
           // 🔹 6. Emit real-time update via Socket.IO
-          socketService.emitToContact(contact.id, 'new-message', newMessage);
-          socketService.emitToUser(firstUser.id, 'inbox-update', {
+          console.log('\n📡 Emitting Socket.IO events...');
+          const messageData = {
+            id: newMessage.id,
+            contactId: contact.id,
+            phone: phone, // Include phone for frontend matching
+            content: text,
+            type: 'incoming',
+            status: 'delivered',
+            sentAt: newMessage.sentAt ? newMessage.sentAt.toISOString() : new Date().toISOString(),
+            deliveredAt: newMessage.deliveredAt ? newMessage.deliveredAt.toISOString() : new Date().toISOString(),
+            createdAt: newMessage.createdAt ? newMessage.createdAt.toISOString() : new Date().toISOString()
+            // Removed mediaType and mediaUrl - not in DB
+          };
+          
+          socketService.emitToContact(contact.id, 'new-message', messageData);
+          console.log('   ✅ Emitted: new-message to contact', contact.id);
+          
+          socketService.emitToUser(userId, 'inbox-update', {
             contactId: contact.id,
             lastMessage: text,
             lastMessageTime: new Date()
           });
-        }
+          console.log('   ✅ Emitted: inbox-update to user', userId);
+          
+          console.log('\n✅ All processing complete for AiSensy format');
+          console.log('========================================\n');
       }
     }
 
@@ -94,7 +321,8 @@ exports.handleWebhook = async (req, res) => {
 
         if (firstUser) {
           const contact = await Contact.findOne({
-            where: { phone, userId: firstUser.id }
+            where: { phone, userId: firstUser.id },
+            attributes: ['id', 'phone', 'name', 'email', 'status', 'tags', 'country', 'lastContacted', 'notes', 'userId', 'createdAt', 'updatedAt']
           });
 
           if (contact) {
@@ -135,10 +363,16 @@ exports.handleWebhook = async (req, res) => {
     }
 
     // 🔹 Always respond 200 to webhook
+    console.log('\n✅ Webhook processed successfully - returning 200 OK');
+    console.log('========================================\n');
     return res.status(200).json({ success: true });
 
   } catch (error) {
-    console.error('AISENSY WEBHOOK ERROR:', error);
+    console.error('\n========================================');
+    console.error('❌ WEBHOOK ERROR:', error);
+    console.error('Error Message:', error.message);
+    console.error('Error Stack:', error.stack);
+    console.error('========================================\n');
 
     return res.status(500).json({
       success: false,

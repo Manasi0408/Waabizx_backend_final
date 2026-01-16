@@ -43,56 +43,56 @@ const Message = sequelize.define('Message', {
     type: DataTypes.INTEGER,
     allowNull: true
   },
-  // Media support
-  mediaType: {
-    type: DataTypes.ENUM('text', 'image', 'video', 'audio', 'document', 'location', 'contact'),
-    defaultValue: 'text'
-  },
-  mediaUrl: {
-    type: DataTypes.TEXT,
-    allowNull: true
-  },
-  mediaFilename: {
-    type: DataTypes.STRING,
-    allowNull: true
-  },
-  mediaSize: {
-    type: DataTypes.INTEGER,
-    allowNull: true
-  },
-  mediaMimeType: {
-    type: DataTypes.STRING,
-    allowNull: true
-  },
-  // Message features
-  replyToId: {
-    type: DataTypes.INTEGER,
-    allowNull: true,
-    references: {
-      model: 'Messages',
-      key: 'id'
-    }
-  },
-  forwardedFrom: {
-    type: DataTypes.INTEGER,
-    allowNull: true,
-    references: {
-      model: 'Messages',
-      key: 'id'
-    }
-  },
-  reactions: {
-    type: DataTypes.JSON,
-    defaultValue: []
-  },
-  isDeleted: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false
-  },
-  deletedAt: {
-    type: DataTypes.DATE,
-    allowNull: true
-  }
+  // Media support (commented out - columns don't exist in DB yet)
+  // mediaType: {
+  //   type: DataTypes.ENUM('text', 'image', 'video', 'audio', 'document', 'location', 'contact'),
+  //   defaultValue: 'text'
+  // },
+  // mediaUrl: {
+  //   type: DataTypes.TEXT,
+  //   allowNull: true
+  // },
+  // mediaFilename: {
+  //   type: DataTypes.STRING,
+  //   allowNull: true
+  // },
+  // mediaSize: {
+  //   type: DataTypes.INTEGER,
+  //   allowNull: true
+  // },
+  // mediaMimeType: {
+  //   type: DataTypes.STRING,
+  //   allowNull: true
+  // },
+  // Message features (commented out - columns don't exist in DB yet)
+  // replyToId: {
+  //   type: DataTypes.INTEGER,
+  //   allowNull: true,
+  //   references: {
+  //     model: 'Messages',
+  //     key: 'id'
+  //   }
+  // },
+  // forwardedFrom: {
+  //   type: DataTypes.INTEGER,
+  //   allowNull: true,
+  //   references: {
+  //     model: 'Messages',
+  //     key: 'id'
+  //   }
+  // },
+  // reactions: {
+  //   type: DataTypes.JSON,
+  //   defaultValue: []
+  // },
+  // isDeleted: {
+  //   type: DataTypes.BOOLEAN,
+  //   defaultValue: false
+  // },
+  // deletedAt: {
+  //   type: DataTypes.DATE,
+  //   allowNull: true
+  // }
 }, {
   timestamps: true
 });

@@ -3,6 +3,12 @@ const router = express.Router();
 const messageController = require('../controllers/messageController');
 const { protect } = require('../middleware/authMiddleware');
 
+// Send message (requires authentication)
+router.post('/send', protect, messageController.sendMessage);
+
+// Send template message (requires authentication)
+router.post('/send-template', protect, messageController.sendTemplate);
+
 // Delete message
 router.delete('/:messageId', protect, messageController.deleteMessage);
 
