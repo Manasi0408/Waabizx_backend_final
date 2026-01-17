@@ -118,31 +118,106 @@ function Inbox() {
 
         if (isForSelectedContact) {
           setMessages(prev => {
-            // Check if message already exists (by ID or content+timestamp)
-            const exists = prev.find(m => 
-              m.id === message.id || 
-              (m.content === message.content && 
-               Math.abs(new Date(m.sentAt || m.createdAt) - new Date(message.sentAt || message.createdAt)) < 2000)
-            );
+            // Check if message already exists (by ID, temp ID, or content+timestamp)
+            const exists = prev.find(m => {
+              // Exact ID match (most reliable)
+              if (m.id === message.id) return true;
+              
+              // For incoming messages: match by content + time + contact (prevent duplicates)
+              if (message.type === 'incoming' && m.type === 'incoming') {
+                // Check if content matches
+                if (m.content === message.content || 
+                    (m.content && message.content && m.content.trim() === message.content.trim())) {
+                  // Check if same contact (by ID, phone, or normalized phone)
+                  const sameContact = 
+                    m.contactId === message.contactId || 
+                    m.phone === message.phone ||
+                    (m.phone && message.phone && m.phone.replace(/\D/g, '') === message.phone.replace(/\D/g, ''));
+                  
+                  if (sameContact) {
+                    // Check if timestamp is close (within 15 seconds)
+                    const timeDiff = Math.abs(
+                      new Date(m.sentAt || m.createdAt || 0) - new Date(message.sentAt || message.createdAt || 0)
+                    );
+                    if (timeDiff < 15000) {
+                      console.log('🔄 Socket: Incoming message duplicate detected:', {
+                        existingId: m.id,
+                        newId: message.id,
+                        content: message.content.substring(0, 30),
+                        timeDiff: timeDiff
+                      });
+                      return true; // Duplicate found
+                    }
+                  }
+                }
+              }
+              
+              // For outgoing messages: match by content + time (to replace optimistic messages)
+              if (message.type === 'outgoing' && m.content === message.content) {
+                const timeDiff = Math.abs(
+                  new Date(m.sentAt || m.createdAt) - new Date(message.sentAt || message.createdAt)
+                );
+                if (timeDiff < 5000) return true; // Within 5 seconds
+              }
+              
+              // Match by content + phone for outgoing messages from same contact
+              if (message.type === 'outgoing' && 
+                  m.type === 'outgoing' && 
+                  m.content === message.content &&
+                  (m.phone === message.phone || m.contactId === message.contactId)) {
+                const timeDiff = Math.abs(
+                  new Date(m.sentAt || m.createdAt) - new Date(message.sentAt || message.createdAt)
+                );
+                if (timeDiff < 5000) return true;
+              }
+              
+              return false;
+            });
             
             if (exists) {
-              // Update existing message (replace optimistic with real one)
-              console.log('🔄 Updating existing message from socket');
-              return prev.map(m => 
-                (m.id === message.id || 
-                 (m.content === message.content && 
-                  Math.abs(new Date(m.sentAt || m.createdAt) - new Date(message.sentAt || message.createdAt)) < 2000))
-                  ? { ...message, isOptimistic: false, source: 'socket' }
-                  : m
-              ).sort((a, b) => {
+              // Update existing message (replace optimistic with real one OR prevent duplicate)
+              console.log('🔄 Duplicate message detected - preventing duplicate:', {
+                messageId: message.id,
+                type: message.type,
+                content: message.content.substring(0, 30)
+              });
+              
+              // For incoming messages: just return prev (don't update, already exists)
+              if (message.type === 'incoming') {
+                return prev;
+              }
+              
+              // For outgoing messages: update optimistic with real data
+              return prev.map(m => {
+                // Match by ID
+                if (m.id === message.id) {
+                  return { ...message, isOptimistic: false, source: 'socket' };
+                }
+                
+                // Match optimistic message by content + time
+                if (m.isOptimistic && message.type === 'outgoing' && m.content === message.content) {
+                  const timeDiff = Math.abs(
+                    new Date(m.sentAt || m.createdAt) - new Date(message.sentAt || message.createdAt)
+                  );
+                  if (timeDiff < 5000) {
+                    return { ...message, isOptimistic: false, source: 'socket' };
+                  }
+                }
+                
+                return m;
+              }).sort((a, b) => {
                 const dateA = new Date(a.sentAt || a.createdAt || 0);
                 const dateB = new Date(b.sentAt || b.createdAt || 0);
                 return dateA - dateB;
               });
             }
             
-            // Add new message
-            console.log('➕ Adding new message from socket');
+            // Add new message (doesn't exist yet)
+            console.log('➕ Adding new message from socket:', {
+              messageId: message.id,
+              type: message.type,
+              content: message.content.substring(0, 30)
+            });
             return [...prev, { ...message, isOptimistic: false, source: 'socket' }].sort((a, b) => {
               const dateA = new Date(a.sentAt || a.createdAt || 0);
               const dateB = new Date(b.sentAt || b.createdAt || 0);
@@ -275,10 +350,16 @@ function Inbox() {
         fetchInboxList(false);
 
         // If we have a selected contact and new message is for them, refresh messages
-        if (selectedContact) {
+        // But only if we're not already fetching (prevent race condition with socket)
+        if (selectedContact && !fetchingMessagesRef.current) {
           const hasNewMessage = inboundMessages.some(msg => msg.phone === selectedContact.phone);
           if (hasNewMessage) {
-            fetchMessages(selectedContact.phone);
+            // Small delay to let socket events process first (socket is faster)
+            setTimeout(() => {
+              if (!fetchingMessagesRef.current) {
+                fetchMessages(selectedContact.phone, false); // false = don't show loading
+              }
+            }, 500); // 500ms delay
           }
         }
       }
@@ -470,24 +551,79 @@ function Inbox() {
           return dateA - dateB;
         });
         
-        // Remove duplicates (prefer server messages over optimistic ones)
+        // Remove duplicates (prefer server messages over optimistic ones, prevent socket duplicates)
         for (const msg of combinedMessages) {
-          // Use ID as primary key, fallback to content+timestamp if ID is still missing
-          const dedupKey = msg.id || `${msg.content}_${new Date(msg.sentAt || msg.createdAt || 0).getTime()}`;
+          // Create deduplication key based on multiple factors
+          const msgTimestamp = new Date(msg.sentAt || msg.createdAt || 0).getTime();
+          const msgContent = String(msg.content || '');
+          const msgType = String(msg.type || '');
+          const msgContactId = String(msg.contactId || '');
+          const msgPhone = String(msg.phone || '');
           
-          // If we've seen this ID, check if current message is from server (prefer server messages)
-          if (seenIds.has(dedupKey)) {
-            const existingIndex = uniqueMessages.findIndex(m => 
-              m.id === msg.id || 
-              (!m.id && !msg.id && m.content === msg.content && 
-               Math.abs(new Date(m.sentAt || m.createdAt) - new Date(msg.sentAt || msg.createdAt)) < 2000)
-            );
-            if (existingIndex >= 0) {
-              // Replace optimistic with server message if found
-              if (uniqueMessages[existingIndex].isOptimistic && !msg.isOptimistic) {
-                uniqueMessages[existingIndex] = msg;
+          // Primary dedup key: ID if available (always convert to string)
+          let dedupKey = msg.id ? String(msg.id) : '';
+          
+          // Secondary dedup key: content + timestamp + type + contact (for incoming messages especially)
+          // Check if we need to generate a key (no ID, or ID is a temp/prefixed ID)
+          if (!dedupKey || (typeof dedupKey === 'string' && (dedupKey.startsWith('meta_') || dedupKey.startsWith('webhook_') || dedupKey.startsWith('temp_')))) {
+            // For incoming messages: use content + time + type + contact (prevent duplicates)
+            if (msgType === 'incoming') {
+              dedupKey = `incoming_${msgContent}_${msgTimestamp}_${msgContactId || msgPhone}`;
+            } else {
+              // For outgoing: use content + time
+              dedupKey = `outgoing_${msgContent}_${msgTimestamp}`;
+            }
+          }
+          
+          // Ensure dedupKey is always a string (safety check)
+          dedupKey = String(dedupKey || '');
+          
+          // Check if we've seen this message before (by ID or content+time+contact)
+          const isDuplicate = uniqueMessages.some(existingMsg => {
+            // Exact ID match
+            if (existingMsg.id === msg.id && msg.id) {
+              return true;
+            }
+            
+            // For incoming messages: match by content + timestamp + contact
+            if (msgType === 'incoming' && existingMsg.type === 'incoming') {
+              if (existingMsg.content === msgContent) {
+                const timeDiff = Math.abs(
+                  new Date(existingMsg.sentAt || existingMsg.createdAt || 0).getTime() - msgTimestamp
+                );
+                // Match if same content, same contact, and within 10 seconds
+                if (timeDiff < 10000 && (
+                  existingMsg.contactId === msgContactId || 
+                  existingMsg.phone === msgPhone ||
+                  (existingMsg.phone && msgPhone && existingMsg.phone.replace(/\D/g, '') === msgPhone.replace(/\D/g, ''))
+                )) {
+                  return true;
+                }
               }
             }
+            
+            // For outgoing messages: match by content + timestamp
+            if (msgType === 'outgoing' && existingMsg.type === 'outgoing') {
+              if (existingMsg.content === msgContent) {
+                const timeDiff = Math.abs(
+                  new Date(existingMsg.sentAt || existingMsg.createdAt || 0).getTime() - msgTimestamp
+                );
+                if (timeDiff < 5000) {
+                  return true;
+                }
+              }
+            }
+            
+            return false;
+          });
+          
+          if (isDuplicate) {
+            console.log('🔄 Duplicate message filtered out:', {
+              id: msg.id,
+              type: msgType,
+              content: msgContent.substring(0, 30),
+              source: msg.source
+            });
             continue;
           }
           
@@ -672,60 +808,82 @@ function Inbox() {
     setMessageText('');
     setSending(true);
 
+    // Create unique temp ID for optimistic message
+    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Create optimistic message FIRST (before API call)
+    const optimisticMessage = {
+      id: tempId,
+      content: text,
+      type: 'outgoing',
+      status: 'sent',
+      sentAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      source: 'optimistic',
+      isOptimistic: true,
+      phone: phone,
+      contactId: selectedContact.id
+    };
+
+    // Add optimistic message immediately
+    setMessages(prev => {
+      // Double-check: avoid duplicates by checking content + time
+      const exists = prev.find(m => 
+        m.content === text && 
+        m.type === 'outgoing' &&
+        m.isOptimistic &&
+        Math.abs(new Date(m.sentAt || m.createdAt) - new Date(optimisticMessage.sentAt)) < 2000
+      );
+      if (exists) {
+        console.log('⚠️ Duplicate optimistic message prevented');
+        return prev;
+      }
+      return [...prev, optimisticMessage].sort((a, b) => {
+        const dateA = new Date(a.sentAt || a.createdAt || 0);
+        const dateB = new Date(b.sentAt || b.createdAt || 0);
+        return dateA - dateB;
+      });
+    });
+
     try {
-      // Send via message API (WhatsApp API) - this will emit socket events
-      let newMessage = null;
-      try {
-        const response = await sendMetaMessage(phone, text);
-        newMessage = response;
-        console.log('✅ Message sent via API:', newMessage);
-      } catch (metaError) {
-        console.error('Error sending via message API:', metaError);
-        // Still try inbox API as fallback
-        try {
-          newMessage = await sendMessage(phone, text);
-        } catch (inboxError) {
-          console.error('Error sending via inbox API:', inboxError);
-        }
+      // Use ONLY inbox API endpoint (not both sendMetaMessage and sendMessage)
+      // This prevents duplicate messages from being created
+      const newMessage = await sendMessage(phone, text);
+      console.log('✅ Message sent via inbox API:', newMessage);
+      
+      // Replace optimistic message with real message (if socket hasn't already)
+      if (newMessage?.id) {
+        setMessages(prev => {
+          // Check if socket already added it
+          const alreadyExists = prev.find(m => m.id === newMessage.id);
+          if (alreadyExists) {
+            // Socket already handled it, remove optimistic
+            return prev.filter(m => m.id !== tempId);
+          }
+          
+          // Replace optimistic with real message
+          return prev.map(m => 
+            m.id === tempId 
+              ? { ...newMessage, isOptimistic: false, source: 'api' }
+              : m
+          ).sort((a, b) => {
+            const dateA = new Date(a.sentAt || a.createdAt || 0);
+            const dateB = new Date(b.sentAt || b.createdAt || 0);
+            return dateA - dateB;
+          });
+        });
       }
       
-      // Create optimistic message (will be replaced by socket event if successful)
-      const optimisticMessage = {
-        id: newMessage?.id || `temp_${Date.now()}`,
-        content: text,
-        type: 'outgoing',
-        status: newMessage?.status || 'sent',
-        sentAt: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-        source: 'optimistic',
-        isOptimistic: true,
-        phone: phone
-      };
-
-      // Add message to local state immediately (optimistic update)
-      setMessages(prev => {
-        // Check if message already exists (avoid duplicates)
-        const exists = prev.find(m => 
-          m.id === optimisticMessage.id || 
-          (m.content === text && 
-           m.isOptimistic && 
-           Math.abs(new Date(m.sentAt || m.createdAt) - new Date(optimisticMessage.sentAt)) < 2000)
-        );
-        if (exists) return prev;
-        return [...prev, optimisticMessage].sort((a, b) => {
-          const dateA = new Date(a.sentAt || a.createdAt || 0);
-          const dateB = new Date(b.sentAt || b.createdAt || 0);
-          return dateA - dateB;
-        });
-      });
-
       // Refresh inbox list to update last message (without loading state)
       fetchInboxList(false);
       
-      // Note: Socket event will update the optimistic message with real data
-      // No need to manually refresh - socket will handle it
+      // Note: Socket event will also update/replace the message if it arrives
     } catch (error) {
       console.error('Error sending message:', error);
+      
+      // Remove optimistic message on error
+      setMessages(prev => prev.filter(m => !(m.id === tempId || (m.isOptimistic && m.content === text))));
+      
       alert(`Failed to send message: ${error.message || 'Please try again.'}`);
       setMessageText(text); // Restore message text on error
     } finally {
@@ -1154,6 +1312,15 @@ function Inbox() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
               </svg>
               <span className={sidebarOpen ? 'block' : 'hidden'}>Campaigns</span>
+            </Link>
+            <Link
+              to="/broadcast"
+              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
+              </svg>
+              <span className={sidebarOpen ? 'block' : 'hidden'}>Broadcast</span>
             </Link>
             <Link
               to="/templates"

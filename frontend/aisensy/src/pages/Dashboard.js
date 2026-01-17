@@ -25,7 +25,7 @@ function Dashboard() {
     activities: []
   });
   const [loadingDashboard, setLoadingDashboard] = useState(true);
-  const [chartTimeRange, setChartTimeRange] = useState(7); // 7, 30, or 90 days
+  const [chartTimeRange, setChartTimeRange] = useState(1); // 1 (Today), 7, 30, or 90 days
   const dropdownRef = useRef(null);
   const notificationRef = useRef(null);
 
@@ -496,6 +496,14 @@ function Dashboard() {
                 </Link>
               </li>
               <li>
+                <Link to="/broadcast" className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition group">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
+                  </svg>
+                  <span className={sidebarOpen ? 'block' : 'hidden md:block'}>Broadcast</span>
+                </Link>
+              </li>
+              <li>
                 <Link to="/templates" className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition group">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -632,7 +640,9 @@ function Dashboard() {
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="text-lg font-semibold text-gray-800">
-                  Messages Sent Over Last {chartTimeRange} Days
+                  {chartTimeRange === 1 
+                    ? 'Messages Sent Today' 
+                    : `Messages Sent Over Last ${chartTimeRange} Days`}
                 </h3>
                 <p className="text-sm text-gray-500 mt-1">Track your messaging performance</p>
               </div>
@@ -641,6 +651,7 @@ function Dashboard() {
                 onChange={(e) => setChartTimeRange(parseInt(e.target.value))}
                 className="text-sm border border-gray-300 rounded-lg px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
+                <option value={1}>Today</option>
                 <option value={7}>Last 7 days</option>
                 <option value={30}>Last 30 days</option>
                 <option value={90}>Last 90 days</option>
@@ -648,17 +659,15 @@ function Dashboard() {
             </div>
             <div className="h-64 md:h-80">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={dashboardData.chartData.length > 0 ? dashboardData.chartData : [
-                  { name: 'Mon', messages: 0 },
-                  { name: 'Tue', messages: 0 },
-                  { name: 'Wed', messages: 0 },
-                  { name: 'Thu', messages: 0 },
-                  { name: 'Fri', messages: 0 },
-                  { name: 'Sat', messages: 0 },
-                  { name: 'Sun', messages: 0 }
-                ]}>
+                <LineChart data={dashboardData.chartData.length > 0 ? dashboardData.chartData : []}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis dataKey="name" stroke="#6b7280" />
+                  <XAxis 
+                    dataKey="name" 
+                    stroke="#6b7280"
+                    angle={chartTimeRange === 1 ? -45 : 0}
+                    textAnchor={chartTimeRange === 1 ? 'end' : 'middle'}
+                    height={chartTimeRange === 1 ? 80 : 30}
+                  />
                   <YAxis stroke="#6b7280" />
                   <Tooltip 
                     contentStyle={{ 
@@ -667,6 +676,8 @@ function Dashboard() {
                       borderRadius: '8px',
                       boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
                     }} 
+                    labelFormatter={(label) => chartTimeRange === 1 ? `Hour: ${label}` : `Date: ${label}`}
+                    formatter={(value) => [`${value} messages`, 'Messages']}
                   />
                   <Legend />
                   <Line 
@@ -676,6 +687,7 @@ function Dashboard() {
                     strokeWidth={3}
                     dot={{ fill: '#3b82f6', r: 5 }}
                     activeDot={{ r: 7 }}
+                    name="Messages Sent"
                   />
                 </LineChart>
               </ResponsiveContainer>

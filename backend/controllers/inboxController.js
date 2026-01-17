@@ -1,6 +1,6 @@
 const { Contact, Message, MetaMessage, InboxMessage, sequelize } = require('../models');
 const { Op } = require('sequelize');
-const aisensyService = require('../services/aisensyService');
+const { sendText, sendTemplate } = require('../services/whatsappService');
 const socketService = require('../services/socketService');
 
 // Get inbox chat list - one row per contact with last message and unread count
@@ -224,85 +224,181 @@ exports.getContactMessages = async (req, res) => {
 exports.sendMessage = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { phone, text } = req.body;
+    const { phone, message: text } = req.body; // Accept both 'phone' and 'to', 'message' and 'text'
 
-    if (!phone || !text) {
+    // Support multiple field names for compatibility
+    const to = phone || req.body.to || req.body.phone;
+    const messageText = text || req.body.message || req.body.text;
+
+    if (!to || !messageText) {
       return res.status(400).json({
         success: false,
-        message: 'Phone and text are required'
+        message: 'Phone and message are required'
       });
     }
 
-    // Find or create contact
+    // Normalize phone number (remove spaces, dashes, but keep country code)
+    const normalizedPhone = to.toString().trim().replace(/[\s\-\(\)]/g, '');
+
+    // 1️⃣ Ensure contact exists - phone has unique constraint, so find by phone first
+    // Then update userId if different (contact might exist for different user)
     let contact = await Contact.findOne({
-      where: {
-        phone,
-        userId
-      }
+      where: { phone: normalizedPhone }
     });
 
     if (!contact) {
-      // Create contact if doesn't exist
+      // Contact doesn't exist, create new one
       contact = await Contact.create({
-        userId,
-        phone,
-        name: phone, // Default name to phone number
+        userId: userId,
+        phone: normalizedPhone,
+        name: normalizedPhone, // Default name to phone number
         status: 'active'
       });
+      console.log('✅ Created new contact (ID:', contact.id + ')');
+    } else {
+      // Contact exists - update userId if different (in case phone was shared across users)
+      const oldUserId = contact.userId;
+      if (contact.userId !== userId) {
+        await contact.update({ userId: userId });
+        // Reload contact to get updated data
+        await contact.reload();
+        console.log('✅ Updated contact userId (ID:', contact.id + ', old userId:', oldUserId + ', new userId:', userId + ')');
+      } else {
+        console.log('✅ Contact found (ID:', contact.id + ')');
+      }
     }
 
-    // Send message via AiSensy service
-    let sendResult;
-    try {
-      sendResult = await aisensyService.sendTextMessage({ phone, text });
-    } catch (sendError) {
-      console.error('Error sending message via AiSensy:', sendError);
-      // Still save the message even if sending fails
-    }
+    // 2️⃣ Check 24-hour window - Look for last inbound message from this contact
+    const lastInbound = await InboxMessage.findOne({
+      where: {
+        contactId: contact.id,
+        direction: 'incoming'
+      },
+      order: [['timestamp', 'DESC']]
+    });
 
-    // Save message to database
+    // Calculate if 24-hour window is open
+    const is24hOpen = lastInbound && 
+      (Date.now() - new Date(lastInbound.timestamp).getTime() < 24 * 60 * 60 * 1000);
+
+    console.log('📅 24-hour window check:', {
+      hasLastInbound: !!lastInbound,
+      lastInboundTime: lastInbound?.timestamp,
+      is24hOpen,
+      hoursSinceLastMessage: lastInbound 
+        ? Math.round((Date.now() - new Date(lastInbound.timestamp).getTime()) / (60 * 60 * 1000) * 10) / 10 
+        : null
+    });
+
+    // 3️⃣ Save message first (will update with waMessageId after API call)
     const message = await Message.create({
       contactId: contact.id,
-      content: text,
+      content: messageText,
       type: 'outgoing',
-      status: sendResult ? 'sent' : 'failed',
-      sentAt: new Date(),
-      errorMessage: sendResult ? null : 'Failed to send via AiSensy service'
+      status: 'sent', // Will be updated based on API result
+      sentAt: new Date()
     });
 
-    // Update contact's lastContacted
-    await contact.update({
-      lastContacted: new Date()
-    });
-
-    // Also save to InboxMessage for consistency
+    // Also save to InboxMessage
     let inboxMessage = null;
     try {
       inboxMessage = await InboxMessage.create({
         contactId: contact.id,
         userId,
         direction: 'outgoing',
-        message: text,
+        message: messageText,
         type: 'text',
-        status: sendResult ? 'sent' : 'failed',
+        status: 'sent', // Will be updated based on API result
         timestamp: new Date()
       });
     } catch (inboxError) {
       console.error('Error saving to InboxMessage:', inboxError);
-      // Continue even if this fails
     }
+
+    // 4️⃣ Send via Meta Cloud API based on 24-hour window
+    let sendResult = null;
+    let apiError = null;
+    let messageSent = false;
+
+    try {
+      if (is24hOpen) {
+        // ✅ CASE 1: 24-Hour Window OPEN - Send TEXT message
+        console.log('🟢 24-hour window OPEN - Sending TEXT message via Meta API');
+        sendResult = await sendText(normalizedPhone, messageText);
+        messageSent = true;
+      } else {
+        // ❌ CASE 2: 24-Hour Window CLOSED - Send TEMPLATE message
+        // Default template name - can be configured via env or passed in request
+        const templateName = req.body.templateName || process.env.DEFAULT_TEMPLATE_NAME || 'hello_world';
+        const templateLanguage = req.body.templateLanguage || 'en_US';
+        
+        console.log('🔴 24-hour window CLOSED - Sending TEMPLATE message via Meta API:', {
+          templateName,
+          templateLanguage,
+          note: 'User message will be ignored, template will be sent instead'
+        });
+        
+        sendResult = await sendTemplate(normalizedPhone, templateName, templateLanguage);
+        messageSent = true;
+        
+        // Note: The actual template is sent, not the user's message
+        // You might want to log this or handle it differently
+      }
+
+      if (sendResult && sendResult.success) {
+        console.log('✅ Meta API call successful:', {
+          messageId: sendResult.messageId,
+          wamid: sendResult.wamid
+        });
+
+        // Update messages with WhatsApp message ID
+        await message.update({
+          status: 'sent',
+          errorMessage: null
+        });
+
+        if (inboxMessage) {
+          await inboxMessage.update({ 
+            status: 'sent',
+            waMessageId: sendResult.wamid || sendResult.messageId
+          });
+        }
+      }
+    } catch (sendError) {
+      apiError = sendError;
+      console.error('❌ Error sending message via Meta API:', sendError.message || sendError);
+      
+      // Update message status to failed
+      const errorMessage = sendError.message || 'Failed to send via Meta API';
+      await message.update({
+        status: 'failed',
+        errorMessage: errorMessage
+      });
+      
+      if (inboxMessage) {
+        await inboxMessage.update({ 
+          status: 'failed'
+        });
+      }
+    }
+
+    // 5️⃣ Update contact's lastContacted
+    await contact.update({
+      lastContacted: new Date()
+    });
 
     // Emit socket event for real-time updates
     try {
       const messageData = {
         id: inboxMessage?.id || message.id,
         contactId: contact.id,
-        phone: phone,
-        content: text, // Use text content
+        phone: normalizedPhone,
+        content: messageText, // Use text content
         type: 'outgoing',
         status: message.status,
         sentAt: message.sentAt ? message.sentAt.toISOString() : new Date().toISOString(),
-        createdAt: message.createdAt ? message.createdAt.toISOString() : new Date().toISOString()
+        createdAt: message.createdAt ? message.createdAt.toISOString() : new Date().toISOString(),
+        waMessageId: inboxMessage?.waMessageId || sendResult?.wamid
       };
       console.log('📡 Emitting new-message socket event from inbox:', messageData);
       socketService.emitToContact(contact.id, 'new-message', messageData);
@@ -310,6 +406,21 @@ exports.sendMessage = async (req, res) => {
     } catch (socketError) {
       console.error('Error emitting socket:', socketError);
       // Don't fail the request if this fails
+    }
+
+    // Return response
+    if (apiError) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send message',
+        error: apiError.message,
+        messageRecord: {
+          id: message.id,
+          content: message.content,
+          status: message.status,
+          type: message.type
+        }
+      });
     }
 
     res.json({
@@ -320,7 +431,10 @@ exports.sendMessage = async (req, res) => {
         status: message.status,
         type: message.type,
         sentAt: message.sentAt,
-        contactId: contact.id
+        contactId: contact.id,
+        waMessageId: inboxMessage?.waMessageId || sendResult?.wamid,
+        is24hWindow: is24hOpen,
+        messageType: is24hOpen ? 'text' : 'template'
       }
     });
   } catch (error) {

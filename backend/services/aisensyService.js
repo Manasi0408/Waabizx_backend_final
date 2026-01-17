@@ -111,8 +111,8 @@ exports.checkApiKeyConnection = async () => {
   }
 };
 
-// Send message - supports text and template
-exports.sendMessage = async ({ phone, text, type, template, campaignName }) => {
+// Send message - supports text, media, and template
+exports.sendMessage = async ({ phone, text, type, template, campaignName, mediaUrl, mediaType }) => {
   const apiKey = process.env.WHATSAPP_API_KEY;
   
   if (!apiKey) {
@@ -129,8 +129,16 @@ exports.sendMessage = async ({ phone, text, type, template, campaignName }) => {
     throw new Error('Campaign name is required. Please set WHATSAPP_CAMPAIGN_NAME in .env file or pass campaignName parameter. Create a LIVE campaign in your AiSensy dashboard first.');
   }
 
+  // Normalize phone number - ensure it has + prefix (required by AiSensy)
+  let normalizedPhone = phone.toString().trim();
+  if (!normalizedPhone.startsWith('+')) {
+    // If phone doesn't start with +, add it (assuming country code is included)
+    normalizedPhone = '+' + normalizedPhone;
+  }
+  console.log('📞 Phone normalized:', phone, '→', normalizedPhone);
+
   // Determine message type
-  const messageType = type || (text ? 'text' : 'template');
+  const messageType = type || (mediaUrl ? 'media' : (text ? 'text' : 'template'));
 
   // Build payload based on message type
   let payload;
@@ -158,7 +166,7 @@ exports.sendMessage = async ({ phone, text, type, template, campaignName }) => {
     payload = {
       apiKey: apiKey,
       campaignName: campaign,
-      destination: phone,
+      destination: normalizedPhone, // ✅ Use normalized phone with +
       userName: 'User', // Required field - must be a string
       source: 'WhatsApp', // Required field
       template: template // ✅ Pass FULL template object as-is (includes components with image)
@@ -185,20 +193,39 @@ exports.sendMessage = async ({ phone, text, type, template, campaignName }) => {
     // Add tags and attributes if needed (optional)
     payload.tags = [];
     payload.attributes = {};
-  } else {
-    // For text messages
+  } else if (messageType === 'media' && mediaUrl) {
+    // For media messages - AiSensy v2 API requires mediaUrl
     payload = {
       apiKey: apiKey,
       campaignName: campaign,
-      destination: phone,
+      destination: normalizedPhone, // ✅ Use normalized phone with +
       userName: 'User', // Required field - must be a string
       source: 'WhatsApp', // Required field
-      text: {
-        body: text
-      },
+      mediaUrl: mediaUrl, // ✅ Media URL is required for media messages
+      mediaType: mediaType || 'image', // image, video, document, audio
+      message: text || '', // Optional caption for media
       tags: [],
       attributes: {}
     };
+    console.log('📷 Sending media message with URL:', mediaUrl);
+  } else {
+    // For text messages - AiSensy v2 API expects 'message' field, NOT 'text.body'
+    // IMPORTANT: Do NOT include 'media' or 'mediaUrl' fields for text messages
+    // If campaign is configured for media, it will fail - need text-only campaign
+    payload = {
+      apiKey: apiKey,
+      campaignName: campaign,
+      destination: normalizedPhone, // ✅ Use normalized phone with +
+      userName: 'User', // Required field - must be a string
+      source: 'WhatsApp', // Required field
+      message: text, // ✅ AiSensy v2 API requires 'message' field for text messages
+      // ✅ DO NOT include 'media' or 'mediaUrl' for text messages
+      tags: [],
+      attributes: {}
+    };
+    console.log('💬 Sending text-only message (no media):', text.substring(0, 50));
+    console.log('⚠️  Note: Campaign must be configured for TEXT messages, not media');
+    console.log('⚠️  If you get "Media URL Missing" error, your campaign is configured for media - use a text-only campaign');
   }
 
   // Debug: Log the payload being sent (hide API key)
@@ -206,7 +233,10 @@ exports.sendMessage = async ({ phone, text, type, template, campaignName }) => {
   if (debugPayload.apiKey) {
     debugPayload.apiKey = '***HIDDEN***';
   }
-  console.log('SENDING TO AISENSY:', JSON.stringify(debugPayload, null, 2));
+  console.log('📤 SENDING TO AISENSY:', JSON.stringify(debugPayload, null, 2));
+  console.log('   Campaign:', campaign);
+  console.log('   Destination:', phone);
+  console.log('   Message Type:', messageType);
 
   try {
     // Campaign endpoint uses apiKey in payload, not Bearer token
@@ -223,22 +253,29 @@ exports.sendMessage = async ({ phone, text, type, template, campaignName }) => {
     return response.data;
   } catch (error) {
     // Log detailed error for debugging
+    const errorData = error.response?.data || {};
+    const errorMsg = errorData.message || errorData.error || error.message || 'Unknown error';
+    
     console.error('AiSensy API Error Details:', {
       status: error.response?.status,
       statusText: error.response?.statusText,
-      data: error.response?.data,
-      message: error.message,
+      data: errorData,
+      message: errorMsg,
       url: 'https://backend.aisensy.com/campaign/t1/api/v2',
       requestPayload: debugPayload
     });
     
+    // Special handling for "Media URL Missing" error with text messages
+    if (errorMsg.includes('Media URL Missing') && messageType === 'text' && text) {
+      const helpfulError = `Campaign "${campaign}" is configured for MEDIA messages, but you're sending TEXT. ` +
+                          `Solution: Create a text-only campaign in AiSensy dashboard or configure the campaign to accept text messages. ` +
+                          `Current campaign requires media URL for all messages.`;
+      console.error('⚠️  CAMPAIGN CONFIGURATION ISSUE:', helpfulError);
+      throw new Error(helpfulError);
+    }
+    
     // Pass through the original error from AiSensy with more details
-    const errorMessage = error.response?.data?.message || 
-                        error.response?.data?.error || 
-                        JSON.stringify(error.response?.data) ||
-                        error.message || 
-                        'Unknown error';
-    throw new Error(errorMessage);
+    throw new Error(errorMsg);
   }
 };
 

@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { getProfile, isAuthenticated, logout } from '../services/authService';
 import { getNotifications, markAsRead, markAllAsRead } from '../services/notificationService';
 import { getOverview, getCampaignAnalytics, getMessageAnalytics, getContactAnalytics, getCostAnalytics } from '../services/analyticsService';
+import { getCampaigns } from '../services/campaignService';
 
 function Analytics() {
   const navigate = useNavigate();
@@ -114,14 +115,14 @@ function Analytics() {
         const backendTimeRange = timeRange === 'day' ? 'today' : timeRange === 'week' ? 'week' : timeRange === 'month' ? 'year' : 'all';
         
         // Fetch all analytics in parallel with timeRange filter
-        const [overview, campaigns, messages, contacts, cost] = await Promise.all([
+        const [overview, campaignsData, messages, contacts, cost] = await Promise.all([
           getOverview(backendTimeRange).catch(err => {
             console.error('Error fetching overview:', err);
             return { messagesSent: 0, delivered: 0, read: 0, failed: 0, replies: 0 };
           }),
-          getCampaignAnalytics(backendTimeRange).catch(err => {
-            console.error('Error fetching campaign analytics:', err);
-            return [];
+          getCampaigns({ page: 1, limit: 1000 }).catch(err => {
+            console.error('Error fetching campaigns:', err);
+            return { campaigns: [] };
           }),
           getMessageAnalytics(backendTimeRange).catch(err => {
             console.error('Error fetching message analytics:', err);
@@ -146,14 +147,33 @@ function Analytics() {
           replies: overview.replies || 0
         });
 
-        // Set campaign analytics
-        const formattedCampaigns = (campaigns || []).map(campaign => ({
-          name: campaign.campaignName || 'Unknown',
-          sent: campaign.sent || 0,
-          delivered: campaign.delivered || 0,
-          read: campaign.read || 0,
-          clicked: campaign.clicked || 0,
-          replies: campaign.replies || 0
+        // Get campaigns from the campaigns API (same as Campaigns page)
+        const campaigns = campaignsData.campaigns || [];
+        
+        // Calculate replies for each campaign (incoming messages with campaignId)
+        // We'll use the analytics API to get replies count per campaign
+        let repliesMap = {};
+        if (campaigns.length > 0) {
+          try {
+            const analyticsCampaigns = await getCampaignAnalytics(backendTimeRange).catch(() => []);
+            analyticsCampaigns.forEach(campaign => {
+              if (campaign.campaignId) {
+                repliesMap[campaign.campaignId] = parseInt(campaign.replies) || 0;
+              }
+            });
+          } catch (err) {
+            console.error('Error fetching replies:', err);
+          }
+        }
+
+        // Format campaigns data - use same data structure as Campaigns page
+        const formattedCampaigns = campaigns.map(campaign => ({
+          name: campaign.name || 'Unknown Campaign',
+          sent: parseInt(campaign.sent) || 0,
+          delivered: parseInt(campaign.delivered) || 0,
+          read: parseInt(campaign.read) || 0,
+          clicked: parseInt(campaign.clicked) || 0,
+          replies: repliesMap[campaign.id] || 0
         }));
         setCampaignAnalytics(formattedCampaigns);
 
@@ -519,6 +539,15 @@ function Analytics() {
               <span className={sidebarOpen ? 'block' : 'hidden'}>Campaigns</span>
             </Link>
             <Link
+              to="/broadcast"
+              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
+              </svg>
+              <span className={sidebarOpen ? 'block' : 'hidden'}>Broadcast</span>
+            </Link>
+            <Link
               to="/templates"
               className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
             >
@@ -651,46 +680,52 @@ function Analytics() {
               <p className="text-sm text-gray-500">Performance per campaign</p>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Campaign Name</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Sent</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Delivered</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Read</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Clicked</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Replies</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {campaignAnalytics.map((campaign, index) => (
-                    <tr key={index} className="hover:bg-gray-50 transition">
-                      <td className="px-4 py-4">
-                        <p className="text-sm font-semibold text-gray-900">{campaign.name}</p>
-                      </td>
-                      <td className="px-4 py-4">
-                        <p className="text-sm text-gray-700">{campaign.sent.toLocaleString()}</p>
-                      </td>
-                      <td className="px-4 py-4">
-                        <p className="text-sm text-gray-700">{campaign.delivered.toLocaleString()}</p>
-                        <p className="text-xs text-gray-500">{campaign.sent > 0 ? ((campaign.delivered / campaign.sent) * 100).toFixed(1) : 0}%</p>
-                      </td>
-                      <td className="px-4 py-4">
-                        <p className="text-sm text-gray-700">{campaign.read.toLocaleString()}</p>
-                        <p className="text-xs text-gray-500">{campaign.delivered > 0 ? ((campaign.read / campaign.delivered) * 100).toFixed(1) : 0}%</p>
-                      </td>
-                      <td className="px-4 py-4">
-                        <p className="text-sm text-gray-700">{campaign.clicked.toLocaleString()}</p>
-                        <p className="text-xs text-gray-500">{campaign.read > 0 ? ((campaign.clicked / campaign.read) * 100).toFixed(1) : 0}%</p>
-                      </td>
-                      <td className="px-4 py-4">
-                        <p className="text-sm text-gray-700">{campaign.replies.toLocaleString()}</p>
-                        <p className="text-xs text-gray-500">{campaign.delivered > 0 ? ((campaign.replies / campaign.delivered) * 100).toFixed(1) : 0}%</p>
-                      </td>
+              {campaignAnalytics.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-gray-500">No campaign data available</p>
+                </div>
+              ) : (
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Campaign Name</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Sent</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Delivered</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Read</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Clicked</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Replies</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {campaignAnalytics.map((campaign, index) => (
+                      <tr key={index} className="hover:bg-gray-50 transition">
+                        <td className="px-4 py-4">
+                          <p className="text-sm font-semibold text-gray-900">{campaign.name || campaign.campaignName || 'Unknown Campaign'}</p>
+                        </td>
+                        <td className="px-4 py-4">
+                          <p className="text-sm text-gray-700">{(campaign.sent || 0).toLocaleString()}</p>
+                        </td>
+                        <td className="px-4 py-4">
+                          <p className="text-sm text-gray-700">{(campaign.delivered || 0).toLocaleString()}</p>
+                          <p className="text-xs text-gray-500">{(campaign.sent || 0) > 0 ? (((campaign.delivered || 0) / (campaign.sent || 1)) * 100).toFixed(1) : 0}%</p>
+                        </td>
+                        <td className="px-4 py-4">
+                          <p className="text-sm text-gray-700">{(campaign.read || 0).toLocaleString()}</p>
+                          <p className="text-xs text-gray-500">{(campaign.delivered || 0) > 0 ? (((campaign.read || 0) / (campaign.delivered || 1)) * 100).toFixed(1) : 0}%</p>
+                        </td>
+                        <td className="px-4 py-4">
+                          <p className="text-sm text-gray-700">{(campaign.clicked || 0).toLocaleString()}</p>
+                          <p className="text-xs text-gray-500">{(campaign.read || 0) > 0 ? (((campaign.clicked || 0) / (campaign.read || 1)) * 100).toFixed(1) : 0}%</p>
+                        </td>
+                        <td className="px-4 py-4">
+                          <p className="text-sm text-gray-700">{(campaign.replies || 0).toLocaleString()}</p>
+                          <p className="text-xs text-gray-500">{(campaign.delivered || 0) > 0 ? (((campaign.replies || 0) / (campaign.delivered || 1)) * 100).toFixed(1) : 0}%</p>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
 

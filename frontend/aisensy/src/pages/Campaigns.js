@@ -300,7 +300,31 @@ function Campaigns() {
   const handleViewDetails = async (campaign) => {
     try {
       const details = await getCampaignById(campaign.id);
-      setCampaignDetails(details);
+      // Backend returns { id, name, status, stats: { total, sent, delivered, read, failed } }
+      // Map it to include all fields for display
+      const campaignData = {
+        ...details,
+        id: details.id || campaign.id,
+        name: details.name || campaign.name,
+        status: details.status || campaign.status,
+        template_name: details.template_name || campaign.template_name,
+        template_language: details.template_language || campaign.template_language,
+        createdAt: details.createdAt || campaign.createdAt,
+        updatedAt: details.updatedAt || campaign.updatedAt,
+        total: details.stats?.total || details.total || campaign.total || 0,
+        sent: details.stats?.sent || details.sent || campaign.sent || 0,
+        delivered: details.stats?.delivered || details.delivered || campaign.delivered || 0,
+        read: details.stats?.read || details.read || campaign.read || 0,
+        failed: details.stats?.failed || details.failed || campaign.failed || 0,
+        stats: details.stats || {
+          total: details.total || campaign.total || 0,
+          sent: details.sent || campaign.sent || 0,
+          delivered: details.delivered || campaign.delivered || 0,
+          read: details.read || campaign.read || 0,
+          failed: details.failed || campaign.failed || 0
+        }
+      };
+      setCampaignDetails(campaignData);
       setShowDetailsModal(true);
     } catch (error) {
       setError(error.message || 'Failed to load campaign details');
@@ -603,6 +627,15 @@ function Campaigns() {
               <span className={sidebarOpen ? 'block' : 'hidden'}>Campaigns</span>
             </Link>
             <Link
+              to="/broadcast"
+              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
+              </svg>
+              <span className={sidebarOpen ? 'block' : 'hidden'}>Broadcast</span>
+            </Link>
+            <Link
               to="/templates"
               className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
             >
@@ -782,12 +815,14 @@ function Campaigns() {
                             </span>
                           </td>
                           <td className="px-6 py-4">
-                            <span className="text-sm text-gray-700">{campaign.totalRecipients || 0}</span>
+                            <span className="text-sm text-gray-700">{campaign.total || campaign.totalRecipients || 0}</span>
                           </td>
                           <td className="px-6 py-4">
                             <div className="text-sm text-gray-700">
-                              <div>Delivered: {campaign.delivered || 0}</div>
-                              <div className="text-xs text-gray-500">Opened: {campaign.opened || 0}</div>
+                              <div>Sent: {parseInt(campaign.sent) || 0}</div>
+                              <div>Delivered: {parseInt(campaign.delivered) || 0}</div>
+                              <div className="text-xs text-gray-500">Read: {parseInt(campaign.read) || 0}</div>
+                              <div className="text-xs text-red-500">Failed: {parseInt(campaign.failed) || 0}</div>
                             </div>
                           </td>
                           <td className="px-6 py-4">

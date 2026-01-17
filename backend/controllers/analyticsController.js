@@ -18,8 +18,12 @@ exports.getOverview = async (req, res) => {
 
 exports.getCampaignAnalytics = async (req, res) => {
   try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'User not authenticated' });
+    }
     const timeRange = getTimeRange(req);
-    const data = await AnalyticsModel.getCampaignAnalytics(timeRange);
+    const data = await AnalyticsModel.getCampaignAnalytics(timeRange, userId);
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

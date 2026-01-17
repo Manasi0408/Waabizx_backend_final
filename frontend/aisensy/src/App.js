@@ -5,10 +5,12 @@ import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
 import Campaigns from './pages/Campaigns';
+import Broadcast from './pages/Broadcast';
 import Templates from './pages/Templates';
 import Analytics from './pages/Analytics';
 import Contacts from './pages/Contacts';
 import Inbox from './pages/Inbox';
+import Chatbot from './components/Chatbot';
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -65,6 +67,14 @@ function App() {
           }
         />
         <Route
+          path="/broadcast"
+          element={
+            <ProtectedRoute>
+              <Broadcast />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/templates"
           element={
             <ProtectedRoute>
@@ -98,6 +108,8 @@ function App() {
         />
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
       </Routes>
+      {/* Chatbot - appears on all pages when authenticated */}
+      <Chatbot />
     </Router>
   );
 }

@@ -8,6 +8,12 @@ const getDateFilter = (timeRange, dateColumn = 'sentAt') => {
     case 'week':
       return `${dateColumn} >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)`;
     case 'year':
+    case 'month': // Frontend sends 'month' which maps to 'year' in backend
+      // For campaigns, show all campaigns (don't filter by date)
+      // For messages, filter by last year
+      if (dateColumn.includes('c.createdAt') || dateColumn.includes('campaigns')) {
+        return '1=1'; // Show all campaigns regardless of creation date
+      }
       return `${dateColumn} >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)`;
     default:
       return '1=1'; // No filter for 'all' or invalid values
@@ -33,22 +39,94 @@ const AnalyticsModel = {
   },
 
   // CAMPAIGN ANALYTICS
-  getCampaignAnalytics: async (timeRange = 'all') => {
-    const dateFilter = getDateFilter(timeRange, 'm.sentAt');
-    const [rows] = await db.query(`
-      SELECT
-        c.id AS campaignId,
-        c.name AS campaignName,
-        COUNT(m.id) AS sent,
-        SUM(m.status = 'delivered') AS delivered,
-        SUM(m.status = 'read') AS \`read\`,
-        0 AS clicked,
-        SUM(m.type = 'incoming') AS replies
-      FROM campaigns c
-      LEFT JOIN messages m ON m.campaignId = c.id AND ${dateFilter}
-      GROUP BY c.id
-    `);
-    return rows;
+  getCampaignAnalytics: async (timeRange = 'all', userId = null) => {
+    try {
+      // For campaign analytics, we want to show ALL campaigns (not filter by creation date)
+      // The time range will only affect message stats (sent, delivered, read, replies)
+      // Build WHERE clause with userId filter only
+      let whereClause = '';
+      const queryParams = [];
+      
+      if (userId) {
+        // Only filter by userId - show all campaigns for this user
+        whereClause = 'c.userId = ?';
+        queryParams.push(userId);
+      } else {
+        // No userId provided, show all campaigns (shouldn't happen with auth)
+        whereClause = '1=1';
+      }
+      
+      // Get campaigns with their stats from Campaign table
+      const query = `
+        SELECT
+          c.id AS campaignId,
+          c.name AS campaignName,
+          COALESCE(c.sent, 0) AS sent,
+          COALESCE(c.delivered, 0) AS delivered,
+          COALESCE(c.read, 0) AS \`read\`,
+          COALESCE(c.clicked, 0) AS clicked
+        FROM campaigns c
+        WHERE ${whereClause}
+        ORDER BY c.createdAt DESC
+      `;
+      
+      console.log('Campaign Analytics Query:', query);
+      console.log('Query Params:', queryParams);
+      console.log('TimeRange:', timeRange, 'UserId:', userId);
+      
+      const [campaignRows] = await db.query(query, queryParams);
+      
+      console.log('Campaign Rows Found:', campaignRows ? campaignRows.length : 0);
+      console.log('Sample Campaign Row:', campaignRows && campaignRows.length > 0 ? campaignRows[0] : 'No rows');
+
+      // Calculate replies for each campaign (incoming messages with campaignId)
+      const campaignIds = campaignRows && campaignRows.length > 0 ? campaignRows.map(row => row.campaignId) : [];
+      let repliesMap = {};
+      
+      if (campaignIds.length > 0) {
+        const messageDateFilter = getDateFilter(timeRange, 'm.sentAt');
+        const placeholders = campaignIds.map(() => '?').join(',');
+        
+        try {
+          const [replyRows] = await db.query(`
+            SELECT
+              m.campaignId,
+              COUNT(*) AS replies
+            FROM messages m
+            WHERE m.campaignId IN (${placeholders})
+              AND m.type = 'incoming'
+              AND ${messageDateFilter}
+            GROUP BY m.campaignId
+          `, campaignIds);
+          
+          if (replyRows && replyRows.length > 0) {
+            replyRows.forEach(row => {
+              repliesMap[row.campaignId] = parseInt(row.replies) || 0;
+            });
+          }
+        } catch (replyError) {
+          console.error('Error calculating replies:', replyError);
+          // Continue without replies if there's an error
+        }
+      }
+
+      // Combine campaign stats with replies
+      const result = (campaignRows || []).map(campaign => ({
+        campaignId: campaign.campaignId,
+        campaignName: campaign.campaignName || campaign.name || 'Unknown Campaign',
+        sent: parseInt(campaign.sent) || 0,
+        delivered: parseInt(campaign.delivered) || 0,
+        read: parseInt(campaign.read) || 0,
+        clicked: parseInt(campaign.clicked) || 0,
+        replies: repliesMap[campaign.campaignId] || 0
+      }));
+
+      console.log('Final Result Count:', result.length);
+      return result;
+    } catch (error) {
+      console.error('Error in getCampaignAnalytics:', error);
+      throw error;
+    }
   },
 
   // MESSAGE ANALYTICS

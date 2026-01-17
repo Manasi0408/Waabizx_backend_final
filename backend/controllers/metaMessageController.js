@@ -29,7 +29,7 @@ exports.checkApiKey = async (req, res) => {
 
 exports.sendMessage = async (req, res) => {
   try {
-    const { phone, text, template, type } = req.body;
+    const { phone, text, template, type, mediaUrl, mediaType } = req.body;
 
     // Phone is always required
     if (!phone) {
@@ -48,12 +48,20 @@ exports.sendMessage = async (req, res) => {
           error: 'Template name and language required' 
         });
       }
-    } else {
-      // For text messages (or default): text is required
-      if (!text) {
+    } else if (type === 'media' || mediaUrl) {
+      // For media messages: mediaUrl is required
+      if (!mediaUrl) {
         return res.json({ 
           success: false, 
-          error: 'Text is required' 
+          error: 'Media URL is required for media messages' 
+        });
+      }
+    } else {
+      // For text messages (or default): text is required
+      if (!text && !mediaUrl) {
+        return res.json({ 
+          success: false, 
+          error: 'Text or media URL is required' 
         });
       }
     }
@@ -68,14 +76,20 @@ exports.sendMessage = async (req, res) => {
     let result = null;
     let sendStatus = 'sent';
     try {
+      // Determine actual message type
+      const actualType = type || (mediaUrl ? 'media' : 'text');
+      
       result = await aisensyService.sendMessage({ 
         phone, 
-        text, 
-        type: type || 'text',
-        template
+        text: text || '', // Text can be empty for media-only messages
+        type: actualType,
+        template,
+        mediaUrl: mediaUrl || null,
+        mediaType: mediaType || 'image'
       });
+      console.log('✅ AiSensy API call successful:', result);
     } catch (sendError) {
-      console.error('Error sending message via AiSensy:', sendError);
+      console.error('❌ Error sending message via AiSensy:', sendError.message || sendError);
       sendStatus = 'failed';
       // Continue to save message even if WhatsApp send fails
     }
@@ -94,21 +108,29 @@ exports.sendMessage = async (req, res) => {
     const userId = req.user?.id;
     
     if (userId) {
-      // Find or create contact for the authenticated user
+      // Find or create contact - phone has unique constraint, so find by phone first
+      // If contact exists with different userId, we'll use that contact
       let contact = await Contact.findOne({
-        where: {
-          phone,
-          userId: userId
-        }
+        where: { phone }
       });
 
       if (!contact) {
+        // Contact doesn't exist, create new one
         contact = await Contact.create({
           userId: userId,
           phone,
           name: phone, // Default name to phone number
           status: 'active'
         });
+        console.log('✅ Created new contact (ID:', contact.id + ')');
+      } else {
+        // Contact exists - update userId if different (in case phone was shared across users)
+        if (contact.userId !== userId) {
+          await contact.update({ userId: userId });
+          console.log('✅ Updated contact userId (ID:', contact.id + ')');
+        } else {
+          console.log('✅ Contact found (ID:', contact.id + ')');
+        }
       }
 
       // Save message to Message table for inbox
@@ -132,21 +154,28 @@ exports.sendMessage = async (req, res) => {
       });
 
       if (firstUser) {
-        // Find or create contact
+        // Find or create contact - phone has unique constraint, so find by phone first
         let contact = await Contact.findOne({
-          where: {
-            phone,
-            userId: firstUser.id
-          }
+          where: { phone }
         });
 
         if (!contact) {
+          // Contact doesn't exist, create new one
           contact = await Contact.create({
             userId: firstUser.id,
             phone,
             name: phone,
             status: 'active'
           });
+          console.log('✅ Created new contact (ID:', contact.id + ')');
+        } else {
+          // Contact exists - update userId if different
+          if (contact.userId !== firstUser.id) {
+            await contact.update({ userId: firstUser.id });
+            console.log('✅ Updated contact userId (ID:', contact.id + ')');
+          } else {
+            console.log('✅ Contact found (ID:', contact.id + ')');
+          }
         }
 
         // Save message to Message table for inbox

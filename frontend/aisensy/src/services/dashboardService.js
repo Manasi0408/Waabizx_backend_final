@@ -6,14 +6,14 @@ const getToken = () => {
 };
 
 // Get Dashboard Stats
-export const getDashboardStats = async (days = 7) => {
+export const getDashboardStats = async (days = 1) => {
   try {
     const token = getToken();
     if (!token) {
       throw new Error('No token found');
     }
 
-    const url = days && days !== 7 
+    const url = days && days !== 1 
       ? `${API_URL}/dashboard/stats?days=${days}`
       : `${API_URL}/dashboard/stats`;
     

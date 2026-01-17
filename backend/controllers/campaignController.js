@@ -64,16 +64,53 @@ exports.createCampaign = async (req, res) => {
 exports.getCampaigns = async (req, res) => {
   try {
     const userId = req.user.id;
+    const { sequelize } = require('../models');
 
     const campaigns = await Campaign.findAll({
       where: { userId },
       order: [['createdAt', 'DESC']],
-      attributes: ['id', 'name', 'template_name', 'status', 'total', 'sent', 'delivered', 'read', 'failed', 'createdAt', 'updatedAt']
+      attributes: ['id', 'name', 'description', 'type', 'template_name', 'status', 'total', 'sent', 'delivered', 'read', 'failed', 'createdAt', 'updatedAt']
     });
+
+    // Calculate dynamic stats from CampaignAudience for each campaign
+    const campaignsWithStats = await Promise.all(
+      campaigns.map(async (campaign) => {
+        try {
+          // Get stats from CampaignAudience table
+          const stats = await CampaignAudience.findAll({
+            where: { campaignId: campaign.id },
+            attributes: [
+              [sequelize.fn('COUNT', sequelize.col('CampaignAudience.id')), 'total'],
+              [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'sent' THEN 1 ELSE 0 END")), 'sent'],
+              [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'delivered' THEN 1 ELSE 0 END")), 'delivered'],
+              [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'read' THEN 1 ELSE 0 END")), 'read'],
+              [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'failed' THEN 1 ELSE 0 END")), 'failed']
+            ],
+            raw: true
+          });
+
+          const stat = stats && stats.length > 0 ? stats[0] : null;
+          
+          // Use dynamic stats if available, otherwise fallback to campaign table values
+          const campaignData = campaign.toJSON();
+          campaignData.sent = stat ? parseInt(stat.sent) || 0 : (campaign.sent || 0);
+          campaignData.delivered = stat ? parseInt(stat.delivered) || 0 : (campaign.delivered || 0);
+          campaignData.read = stat ? parseInt(stat.read) || 0 : (campaign.read || 0);
+          campaignData.failed = stat ? parseInt(stat.failed) || 0 : (campaign.failed || 0);
+          campaignData.total = stat ? parseInt(stat.total) || 0 : (campaign.total || 0);
+
+          return campaignData;
+        } catch (statError) {
+          console.error(`Error calculating stats for campaign ${campaign.id}:`, statError);
+          // Return campaign with existing values if stat calculation fails
+          return campaign.toJSON();
+        }
+      })
+    );
 
     res.json({
       success: true,
-      campaigns
+      campaigns: campaignsWithStats
     });
   } catch (error) {
     console.error('Error fetching campaigns:', error);
@@ -90,6 +127,7 @@ exports.getCampaignById = async (req, res) => {
   try {
     const userId = req.user.id;
     const campaignId = req.params.id;
+    const { sequelize } = require('../models');
 
     const campaign = await Campaign.findOne({
       where: {
@@ -105,14 +143,42 @@ exports.getCampaignById = async (req, res) => {
       });
     }
 
-    // Calculate stats from audience
-    const stats = {
+    // Calculate dynamic stats from CampaignAudience table
+    let stats = {
       total: campaign.total || 0,
       sent: campaign.sent || 0,
       delivered: campaign.delivered || 0,
       read: campaign.read || 0,
       failed: campaign.failed || 0
     };
+
+    try {
+      const audienceStats = await CampaignAudience.findAll({
+        where: { campaignId },
+        attributes: [
+          [sequelize.fn('COUNT', sequelize.col('CampaignAudience.id')), 'total'],
+          [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'sent' THEN 1 ELSE 0 END")), 'sent'],
+          [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'delivered' THEN 1 ELSE 0 END")), 'delivered'],
+          [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'read' THEN 1 ELSE 0 END")), 'read'],
+          [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'failed' THEN 1 ELSE 0 END")), 'failed']
+        ],
+        raw: true
+      });
+
+      if (audienceStats && audienceStats.length > 0) {
+        const stat = audienceStats[0];
+        stats = {
+          total: parseInt(stat.total) || 0,
+          sent: parseInt(stat.sent) || 0,
+          delivered: parseInt(stat.delivered) || 0,
+          read: parseInt(stat.read) || 0,
+          failed: parseInt(stat.failed) || 0
+        };
+      }
+    } catch (statError) {
+      console.error(`Error calculating stats for campaign ${campaignId}:`, statError);
+      // Use campaign table values as fallback
+    }
 
     res.json({
       success: true,

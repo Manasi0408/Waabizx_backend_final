@@ -103,7 +103,24 @@ export const getCampaignById = async (campaignId) => {
     }
 
     if (data.success) {
-      return data.campaign;
+      // Backend returns { success: true, id, name, status, stats }
+      // Also check if it's wrapped in campaign object
+      const campaignData = data.campaign || data;
+      return {
+        id: campaignData.id,
+        name: campaignData.name,
+        status: campaignData.status,
+        template_name: campaignData.template_name,
+        template_language: campaignData.template_language,
+        createdAt: campaignData.createdAt,
+        updatedAt: campaignData.updatedAt,
+        stats: campaignData.stats || {},
+        total: campaignData.stats?.total || campaignData.total || 0,
+        sent: campaignData.stats?.sent || campaignData.sent || 0,
+        delivered: campaignData.stats?.delivered || campaignData.delivered || 0,
+        read: campaignData.stats?.read || campaignData.read || 0,
+        failed: campaignData.stats?.failed || campaignData.failed || 0
+      };
     }
 
     throw new Error(data.message || 'Failed to fetch campaign');

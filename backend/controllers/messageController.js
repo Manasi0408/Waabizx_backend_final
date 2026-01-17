@@ -8,29 +8,72 @@ exports.sendMessage = async (req, res) => {
   try {
     // Get userId from authenticated user (middleware sets req.user)
     const userId = req.user.id;
-    const { phone, message } = req.body;
+    
+    // Log incoming payload for debugging
+    console.log('📥 Inbox payload received:', JSON.stringify(req.body, null, 2));
+    
+    // Accept multiple field name formats (phone, to, contact.phone) and (message, text, content)
+    let phone = req.body.phone || req.body.to || req.body.contact?.phone;
+    let message = req.body.message || req.body.text || req.body.content;
 
-    // Validate input
-    if (!phone || !message) {
-      return res.json({ 
+    // Validate input with detailed error messages
+    if (!phone) {
+      console.error('❌ Missing phone number in payload:', req.body);
+      return res.status(400).json({ 
         success: false, 
-        msg: "Missing required fields: phone, message" 
+        msg: "Missing required field: phone (or 'to' or 'contact.phone')",
+        receivedPayload: req.body
       });
     }
 
+    if (!message) {
+      console.error('❌ Missing message content in payload:', req.body);
+      return res.status(400).json({ 
+        success: false, 
+        msg: "Missing required field: message (or 'text' or 'content')",
+        receivedPayload: req.body
+      });
+    }
+
+    // Normalize phone number format (ensure it has country code)
+    // Remove any spaces, dashes, parentheses
+    phone = phone.toString().replace(/[\s\-\(\)]/g, '');
+    
+    // If phone doesn't start with country code, log warning but still try
+    if (!phone.match(/^\d{10,15}$/)) {
+      console.warn('⚠️  Phone number format may be invalid:', phone);
+    }
+    
+    console.log('✅ Processed request - Phone:', phone, 'Message:', message.substring(0, 50) + (message.length > 50 ? '...' : ''));
+
     // Check environment variables (check multiple possible names)
-    const phoneNumberId = process.env.Phone_Number_ID;
-    const permanentToken = process.env.Whatsapp_Token;
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || 
+                          process.env.PHONE_NUMBER_ID || 
+                          process.env.Phone_Number_ID;
+    const permanentToken = process.env.WHATSAPP_TOKEN || 
+                          process.env.PERMANENT_TOKEN || 
+                          process.env.Whatsapp_Token;
+    
+    console.log('🔍 Checking environment variables...');
+    console.log('  WHATSAPP_PHONE_NUMBER_ID:', process.env.WHATSAPP_PHONE_NUMBER_ID ? '✓ Found' : '✗ Missing');
+    console.log('  PHONE_NUMBER_ID:', process.env.PHONE_NUMBER_ID ? '✓ Found' : '✗ Missing');
+    console.log('  Phone_Number_ID:', process.env.Phone_Number_ID ? '✓ Found' : '✗ Missing');
+    console.log('  WHATSAPP_TOKEN:', process.env.WHATSAPP_TOKEN ? '✓ Found' : '✗ Missing');
+    console.log('  PERMANENT_TOKEN:', process.env.PERMANENT_TOKEN ? '✓ Found' : '✗ Missing');
+    console.log('  Whatsapp_Token:', process.env.Whatsapp_Token ? '✓ Found' : '✗ Missing');
+    console.log('  Selected PHONE_NUMBER_ID:', phoneNumberId || 'NONE');
+    console.log('  Selected TOKEN:', permanentToken ? (permanentToken.substring(0, 10) + '...') : 'NONE');
     
     if (!phoneNumberId || !permanentToken) {
-      console.warn("⚠️  Missing Meta WhatsApp API credentials:");
-      console.warn("  PHONE_NUMBER_ID:", phoneNumberId ? "✓ Found" : "✗ Missing");
-      console.warn("  PERMANENT_TOKEN:", permanentToken ? "✓ Found" : "✗ Missing");
-      console.warn("\n📝 To enable message sending, add these to your .env file:");
-      console.warn("  PHONE_NUMBER_ID=your_phone_number_id");
-      console.warn("  PERMANENT_TOKEN=your_permanent_access_token");
-      console.warn("\n💡 You can still test the endpoint structure without these credentials.");
-      console.warn("   The message will be saved to the database but not sent via WhatsApp.");
+      console.error("❌ Missing Meta WhatsApp API credentials!");
+      console.error("  PHONE_NUMBER_ID:", phoneNumberId ? "✓ Found" : "✗ Missing");
+      console.error("  TOKEN:", permanentToken ? "✓ Found" : "✗ Missing");
+      console.error("\n📝 To enable message sending, add these to your .env file:");
+      console.error("  WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id");
+      console.error("  WHATSAPP_TOKEN=your_permanent_access_token");
+      console.error("\n💡 Alternative names also supported:");
+      console.error("  PHONE_NUMBER_ID or Phone_Number_ID");
+      console.error("  PERMANENT_TOKEN or Whatsapp_Token");
       
       // Still allow the request to proceed - save to DB but mark as failed
       // This allows testing the endpoint structure even without API credentials
@@ -46,6 +89,7 @@ exports.sendMessage = async (req, res) => {
       }
 
       // Save message with failed status (API credentials missing)
+      console.error('💾 Saving message to database with status=failed (credentials missing)...');
       const saved = await InboxMessage.create({
         contactId: contact.id,
         userId,
@@ -55,6 +99,8 @@ exports.sendMessage = async (req, res) => {
         status: "failed",
         timestamp: new Date()
       });
+      console.error('💾 Message saved to DB with status=failed (ID:', saved.id + ')');
+      console.error('   Reason: API credentials not configured');
 
       return res.json({ 
         success: false, 
@@ -68,38 +114,93 @@ exports.sendMessage = async (req, res) => {
       });
     }
 
-    const contact = await Contact.findOne({ where: { phone, userId } });
-
+    // Find contact - try exact match first, then normalize and try again
+    let contact = await Contact.findOne({ where: { phone, userId } });
+    
+    // If not found, try creating contact automatically (for new conversations)
     if (!contact) {
-      return res.json({ success: false, msg: "Contact not found" });
+      console.log('⚠️  Contact not found, creating new contact for phone:', phone);
+      try {
+        contact = await Contact.create({
+          userId,
+          phone,
+          name: phone, // Default name to phone number
+          status: 'active'
+        });
+        console.log('✅ Created new contact (ID:', contact.id + ')');
+      } catch (createError) {
+        console.error('❌ Error creating contact:', createError);
+        return res.status(404).json({ 
+          success: false, 
+          msg: `Contact not found and could not be created for phone: ${phone}`,
+          error: createError.message
+        });
+      }
+    } else {
+      console.log('✅ Contact found (ID:', contact.id + ')');
     }
 
     // Send via Meta API (works for both verified and non-verified numbers)
     // For non-verified: Meta will enforce 24-hour restriction automatically
     // For verified: No restriction, message will send
     const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+    
+    const apiPayload = {
+      messaging_product: "whatsapp",
+      to: phone,
+      type: "text",
+      text: { body: message }
+    };
+    
+    console.log('📤 Sending to Meta API...');
+    console.log('  URL:', url);
+    console.log('  Payload:', JSON.stringify(apiPayload, null, 2));
+    console.log('  Phone Number ID:', phoneNumberId);
+    console.log('  Token (first 20 chars):', permanentToken ? permanentToken.substring(0, 20) + '...' : 'NONE');
+    
     let response;
     try {
       response = await axios.post(
         url,
-        {
-          messaging_product: "whatsapp",
-          to: phone,
-          type: "text",
-          text: { body: message }
-        },
+        apiPayload,
         {
           headers: {
             Authorization: `Bearer ${permanentToken}`,
             "Content-Type": "application/json"
-          }
+          },
+          timeout: 30000 // 30 second timeout
         }
       );
+      
+      // Log successful response
+      console.log('✅ Meta API Response Status:', response.status);
+      console.log('✅ Meta API Response Data:', JSON.stringify(response.data, null, 2));
+      
+      const waMessageId = response.data.messages?.[0]?.id;
+      console.log('✅ WhatsApp Message ID:', waMessageId || 'N/A');
+      
+      if (!response.data.messages || !waMessageId) {
+        console.error('⚠️  WARNING: Meta API response missing message ID!');
+        console.error('  Response:', JSON.stringify(response.data, null, 2));
+      } else {
+        console.log('✅ Message successfully sent to WhatsApp! Message ID:', waMessageId);
+      }
     } catch (apiError) {
-      console.error("Meta API Error:", apiError?.response?.data || apiError.message);
-      const errorData = apiError?.response?.data?.error || {};
+      console.error("❌ Meta API Error occurred!");
+      console.error("  Error Type:", apiError.name);
+      console.error("  Error Message:", apiError.message);
+      console.error("  Response Status:", apiError.response?.status);
+      console.error("  Response Status Text:", apiError.response?.statusText);
+      console.error("  Response Data:", JSON.stringify(apiError.response?.data || {}, null, 2));
+      console.error("  Request URL:", apiError.config?.url);
+      console.error("  Request Method:", apiError.config?.method);
+      
+      const errorData = apiError.response?.data?.error || {};
       const errorCode = errorData.code;
       const errorMsg = errorData.message || apiError.message || "Failed to send via Meta API";
+      
+      console.error("  Error Code:", errorCode || 'N/A');
+      console.error("  Error Message:", errorMsg);
       
       // Check if it's a 24-hour restriction error (for non-verified numbers)
       // Error codes: 131047, 131026, or message contains "24 hour" or "session"
@@ -109,9 +210,15 @@ exports.sendMessage = async (req, res) => {
                            errorMsg.toLowerCase().includes('session') ||
                            errorMsg.toLowerCase().includes('template required');
       
-      // Save failed message
+      // Save failed message with error details
+      let errorMessageToSave = errorMsg;
+      if (errorCode) {
+        errorMessageToSave = `[${errorCode}] ${errorMsg}`;
+      }
+      
+      console.error('💾 Saving failed message to database with error details...');
       try {
-        await InboxMessage.create({
+        const failedMessage = await InboxMessage.create({
           contactId: contact.id,
           userId,
           direction: "outgoing",
@@ -119,13 +226,19 @@ exports.sendMessage = async (req, res) => {
           type: "text",
           status: "failed",
           timestamp: new Date()
+          // Note: If InboxMessage table has errorMessage field, add:
+          // errorMessage: errorMessageToSave
         });
+        console.error('💾 Failed message saved to DB (ID:', failedMessage.id + ')');
+        console.error('   Error:', errorMessageToSave);
+        console.error('   Error Code:', errorCode || 'N/A');
       } catch (saveError) {
-        console.error("Error saving failed message:", saveError);
+        console.error("❌ Error saving failed message to DB:", saveError);
       }
 
       // Return specific message for 24-hour restriction
       if (is24HourError) {
+        console.error('⚠️  24-HOUR SESSION EXPIRED - User must send message first or use template');
         return res.json({ 
           success: false,
           sessionExpired: true,
@@ -136,10 +249,12 @@ exports.sendMessage = async (req, res) => {
       }
 
       // Other API errors
+      console.error('❌ META API CALL FAILED - Message not sent to WhatsApp');
       return res.json({ 
         success: false, 
         msg: `Meta API Error: ${errorMsg}`,
-        error: apiError?.response?.data || apiError.message
+        error: apiError?.response?.data || apiError.message,
+        errorCode: errorCode || 'UNKNOWN'
       });
     }
 
@@ -157,8 +272,8 @@ exports.sendMessage = async (req, res) => {
         timestamp: new Date()
       });
     } catch (dbError) {
-      console.error("Database Error saving message:", dbError);
-      return res.json({ 
+      console.error("❌ Database Error saving message:", dbError);
+      return res.status(500).json({ 
         success: false, 
         msg: `Database Error: ${dbError.message}`,
         error: dbError.message
@@ -194,6 +309,7 @@ exports.sendMessage = async (req, res) => {
       // Don't fail the request if this fails
     }
 
+    console.log('✅ Message sent successfully! ID:', saved.id, 'Contact:', contact.id, 'Phone:', phone);
     return res.json({ success: true, data: saved });
   } catch (err) {
     console.error("Outgoing Error:", err);
@@ -255,11 +371,8 @@ exports.deleteMessage = async (req, res) => {
       });
     }
 
-    // Soft delete
-    await message.update({
-      isDeleted: true,
-      deletedAt: new Date()
-    });
+    // Delete message (hard delete since isDeleted column doesn't exist)
+    await message.destroy();
 
     // Emit to contact room
     socketService.emitToContact(message.contactId, 'message-deleted', {
@@ -440,7 +553,7 @@ exports.searchMessages = async (req, res) => {
     const messages = await Message.findAll({
       where: {
         contactId: contact.id,
-        isDeleted: false,
+        // Note: isDeleted column doesn't exist in Messages table
         content: {
           [Op.like]: `%${query}%`
         }
@@ -733,8 +846,8 @@ exports.getMessagesPaginated = async (req, res) => {
 
     const { count, rows: messages } = await Message.findAndCountAll({
       where: {
-        contactId: contact.id,
-        isDeleted: false
+        contactId: contact.id
+        // Note: isDeleted column doesn't exist in Messages table
       },
       limit: parseInt(limit),
       offset,

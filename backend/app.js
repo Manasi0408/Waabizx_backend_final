@@ -8,6 +8,7 @@ const logger = require('./utils/logger');
 // Import routes
 const authRoutes = require('./routes/authRoutes');
 const campaignRoutes = require('./routes/campaignRoutes');
+const broadcastRoutes = require('./routes/broadcastRoutes');
 const contactRoutes = require('./routes/contactRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const templateRoutes = require('./routes/templateRoutes');
@@ -20,6 +21,7 @@ const inboxRoutes = require('./routes/inboxRoutes');
 const messageRoutes = require('./routes/messageRoutes');
 const contactManagementRoutes = require('./routes/contactManagementRoutes');
 const mediaRoutes = require('./routes/mediaRoutes');
+const chatbotRoutes = require('./routes/chatbotRoutes');
 
 // Initialize Express app
 const app = express();
@@ -61,6 +63,7 @@ app.get('/health', (req, res) => {
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/campaigns', campaignRoutes);
+app.use('/api/broadcast', broadcastRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/contact-management', contactManagementRoutes);
 app.use('/api/dashboard', dashboardRoutes);
@@ -75,6 +78,7 @@ app.use('/api/inbox', inboxRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/contact-management', contactManagementRoutes);
 app.use('/api/media', mediaRoutes);
+app.use('/api/chatbot', chatbotRoutes);
 
 // 404 handler
 app.use((req, res) => {

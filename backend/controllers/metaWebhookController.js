@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { WebhookLog, MetaMessage, Contact, Message, User } = require('../models');
+const { WebhookLog, MetaMessage, Contact, Message, InboxMessage, User } = require('../models');
 const { Op } = require('sequelize');
 const socketService = require('../services/socketService');
 
@@ -133,8 +133,8 @@ exports.handleWebhook = async (req, res) => {
           console.log('   User ID:', userId);
         }
 
-          // Save message to Message table
-          console.log('\n💾 Saving message to database...');
+          // Save message to Message table (for inbox compatibility)
+          console.log('\n💾 Saving message to Message table...');
           const newMessage = await Message.create({
             contactId: contact.id,
             content: text,
@@ -143,10 +143,26 @@ exports.handleWebhook = async (req, res) => {
             sentAt: timestamp,
             deliveredAt: timestamp
           });
-          console.log('✅ Message saved to DB!');
-          console.log('   Message ID:', newMessage.id);
-          console.log('   Contact ID:', contact.id);
-          console.log('   Content:', text.substring(0, 50) + (text.length > 50 ? '...' : ''));
+          console.log('✅ Message saved to Message table! ID:', newMessage.id);
+
+          // 🔹 CRITICAL: Also save to InboxMessage table (inbox fetches from here!)
+          console.log('\n💾 Saving message to InboxMessage table...');
+          let inboxMessage = null;
+          try {
+            inboxMessage = await InboxMessage.create({
+              contactId: contact.id,
+              userId: userId,
+              direction: 'incoming',
+              message: text,
+              type: 'text',
+              status: 'delivered',
+              timestamp: timestamp
+            });
+            console.log('✅ Message saved to InboxMessage table! ID:', inboxMessage.id);
+          } catch (inboxError) {
+            console.error('❌ Error saving to InboxMessage:', inboxError);
+            // Don't fail the whole request if this fails
+          }
 
           console.log('\n🔄 Updating contact lastContacted...');
           await contact.update({
@@ -156,8 +172,10 @@ exports.handleWebhook = async (req, res) => {
 
           // Emit real-time update
           console.log('\n📡 Emitting Socket.IO events...');
+          // Use InboxMessage ID if available, otherwise fall back to Message ID
+          const messageId = inboxMessage?.id || newMessage.id;
           const messageData = {
-            id: newMessage.id,
+            id: messageId,
             contactId: contact.id,
             phone: fromNumber, // Include phone for frontend matching
             content: text,
@@ -165,11 +183,11 @@ exports.handleWebhook = async (req, res) => {
             status: 'delivered',
             sentAt: timestamp.toISOString(),
             deliveredAt: timestamp.toISOString(),
-            createdAt: newMessage.createdAt ? newMessage.createdAt.toISOString() : new Date().toISOString()
+            createdAt: newMessage.createdAt ? newMessage.createdAt.toISOString() : timestamp.toISOString()
           };
           
           socketService.emitToContact(contact.id, 'new-message', messageData);
-          console.log('   ✅ Emitted: new-message to contact', contact.id);
+          console.log('   ✅ Emitted: new-message to contact', contact.id, 'Message ID:', messageId);
           
           socketService.emitToUser(userId, 'inbox-update', {
             contactId: contact.id,
@@ -254,8 +272,8 @@ exports.handleWebhook = async (req, res) => {
           console.log('   User ID:', userId);
         }
 
-          // 🔹 4. Save message to Message table (for inbox)
-          console.log('\n💾 Saving message to database...');
+          // 🔹 4. Save message to Message table (for inbox compatibility)
+          console.log('\n💾 Saving message to Message table...');
           const newMessage = await Message.create({
             contactId: contact.id,
             content: text,
@@ -263,12 +281,27 @@ exports.handleWebhook = async (req, res) => {
             status: 'delivered', // Incoming messages are considered delivered
             sentAt: new Date(),
             deliveredAt: new Date()
-            // Removed mediaType and mediaUrl - columns don't exist in DB
           });
-          console.log('✅ Message saved to DB!');
-          console.log('   Message ID:', newMessage.id);
-          console.log('   Contact ID:', contact.id);
-          console.log('   Content:', text.substring(0, 50) + (text.length > 50 ? '...' : ''));
+          console.log('✅ Message saved to Message table! ID:', newMessage.id);
+
+          // 🔹 CRITICAL: Also save to InboxMessage table (inbox fetches from here!)
+          console.log('\n💾 Saving message to InboxMessage table...');
+          let inboxMessage = null;
+          try {
+            inboxMessage = await InboxMessage.create({
+              contactId: contact.id,
+              userId: userId,
+              direction: 'incoming',
+              message: text,
+              type: 'text',
+              status: 'delivered',
+              timestamp: new Date()
+            });
+            console.log('✅ Message saved to InboxMessage table! ID:', inboxMessage.id);
+          } catch (inboxError) {
+            console.error('❌ Error saving to InboxMessage:', inboxError);
+            // Don't fail the whole request if this fails
+          }
 
           // 🔹 5. Update contact's lastContacted
           console.log('\n🔄 Updating contact lastContacted...');
@@ -279,26 +312,27 @@ exports.handleWebhook = async (req, res) => {
 
           // 🔹 6. Emit real-time update via Socket.IO
           console.log('\n📡 Emitting Socket.IO events...');
+          // Use InboxMessage ID if available, otherwise fall back to Message ID
+          const messageId = inboxMessage?.id || newMessage.id;
           const messageData = {
-            id: newMessage.id,
+            id: messageId,
             contactId: contact.id,
-            phone: phone, // Include phone for frontend matching
+            phone: fromNumber, // Include phone for frontend matching
             content: text,
             type: 'incoming',
             status: 'delivered',
-            sentAt: newMessage.sentAt ? newMessage.sentAt.toISOString() : new Date().toISOString(),
-            deliveredAt: newMessage.deliveredAt ? newMessage.deliveredAt.toISOString() : new Date().toISOString(),
-            createdAt: newMessage.createdAt ? newMessage.createdAt.toISOString() : new Date().toISOString()
-            // Removed mediaType and mediaUrl - not in DB
+            sentAt: newMessage.sentAt ? newMessage.sentAt.toISOString() : timestamp.toISOString(),
+            deliveredAt: newMessage.deliveredAt ? newMessage.deliveredAt.toISOString() : timestamp.toISOString(),
+            createdAt: newMessage.createdAt ? newMessage.createdAt.toISOString() : timestamp.toISOString()
           };
           
           socketService.emitToContact(contact.id, 'new-message', messageData);
-          console.log('   ✅ Emitted: new-message to contact', contact.id);
+          console.log('   ✅ Emitted: new-message to contact', contact.id, 'Message ID:', messageId);
           
           socketService.emitToUser(userId, 'inbox-update', {
             contactId: contact.id,
             lastMessage: text,
-            lastMessageTime: new Date()
+            lastMessageTime: timestamp
           });
           console.log('   ✅ Emitted: inbox-update to user', userId);
           
