@@ -1,5 +1,5 @@
 const axios = require('axios');
-const { Message, Contact, User, InboxMessage } = require('../models');
+const { Message, Contact, User, InboxMessage, Template } = require('../models');
 const { Op } = require('sequelize');
 const socketService = require('../services/socketService');
 
@@ -583,6 +583,23 @@ exports.sendTemplate = async (req, res) => {
     // Get userId from authenticated user
     const userId = req.user.id;
     const { phone, templateName, templateLanguage = "en_US", templateParams = [] } = req.body;
+    
+    // Get template content from database
+    let templateContent = `Template: ${templateName}`;
+    try {
+      const template = await Template.findOne({
+        where: {
+          name: templateName,
+          userId: userId,
+          status: 'approved'
+        }
+      });
+      if (template && template.content) {
+        templateContent = template.content;
+      }
+    } catch (templateError) {
+      console.log('Could not fetch template content, using default:', templateError.message);
+    }
 
     // Validate input
     if (!phone || !templateName) {
@@ -629,11 +646,30 @@ exports.sendTemplate = async (req, res) => {
     };
 
     // Add components only if templateParams provided
-    if (templateParams && templateParams.length > 0) {
+    // Ensure templateParams is an array
+    let paramsArray = [];
+    if (templateParams) {
+      if (Array.isArray(templateParams)) {
+        paramsArray = templateParams;
+      } else if (typeof templateParams === 'string') {
+        try {
+          paramsArray = JSON.parse(templateParams);
+          if (!Array.isArray(paramsArray)) {
+            paramsArray = [];
+          }
+        } catch (e) {
+          paramsArray = [];
+        }
+      } else if (typeof templateParams === 'object') {
+        paramsArray = Object.values(templateParams);
+      }
+    }
+    
+    if (paramsArray && paramsArray.length > 0) {
       templatePayload.template.components = [
         {
           type: "BODY",
-          parameters: templateParams.map(param => ({ 
+          parameters: paramsArray.map(param => ({ 
             type: "text", 
             text: typeof param === 'string' ? param : String(param)
           }))
@@ -712,7 +748,7 @@ exports.sendTemplate = async (req, res) => {
         contactId: contact.id,
         userId: userId,
         direction: "outgoing",
-        message: `Template: ${templateName}`,
+        message: templateContent, // Use actual template content instead of "Template: templateName"
         type: "text",
         status: "sent",
         waMessageId: waMessageId,
@@ -747,7 +783,7 @@ exports.sendTemplate = async (req, res) => {
             contactId: contact.id,
             userId: userId,
             direction: "outgoing",
-            message: `Template: ${templateName}`,
+            message: templateContent, // Use actual template content
             type: "text",
             status: "sent",
             waMessageId: waMessageId,
@@ -787,12 +823,14 @@ exports.sendTemplate = async (req, res) => {
           id: savedMessage.id,
           contactId: contact.id,
           phone: phone,
-          content: `Template: ${templateName}`,
+          content: templateContent, // Use actual template content
           type: 'outgoing',
           status: savedMessage.status,
           sentAt: savedMessage.timestamp ? savedMessage.timestamp.toISOString() : new Date().toISOString(),
           createdAt: savedMessage.createdAt ? savedMessage.createdAt.toISOString() : new Date().toISOString(),
-          waMessageId: waMessageId
+          waMessageId: waMessageId,
+          isTemplate: true,
+          templateName: templateName
         };
         socketService.emitToContact(contact.id, "new-message", messageData);
         socketService.emitToUser(userId, "inbox-update", { contactId: contact.id });
@@ -809,11 +847,14 @@ exports.sendTemplate = async (req, res) => {
       messageId: savedMessage?.id || null
     });
   } catch (error) {
-    console.error("Template Send Error:", error.response?.data || error);
+    console.error("Template Send Error:", error);
+    console.error("Error stack:", error.stack);
+    const errorMessage = error.message || (typeof error === 'string' ? error : JSON.stringify(error));
     return res.status(500).json({
       success: false,
       message: "Failed to send template",
-      error: error.response?.data || error.message
+      error: errorMessage,
+      details: error.response?.data || (error.stack ? error.stack.split('\n')[0] : null)
     });
   }
 };

@@ -176,9 +176,12 @@ export const getWebhookLogs = async (limit = 50, event_type = null, phone = null
       throw new Error('No token found');
     }
 
-    let url = `${API_URL}/webhooks/logs?limit=${limit}`;
+    let url = `${API_URL}/webhook/logs?limit=${limit}`;
     if (event_type) {
-      url += `&event_type=${event_type}`;
+      url += `&event_type=${encodeURIComponent(event_type)}`;
+    }
+    if (phone) {
+      url += `&phone=${encodeURIComponent(phone)}`;
     }
 
     const response = await fetch(url, {
@@ -192,6 +195,11 @@ export const getWebhookLogs = async (limit = 50, event_type = null, phone = null
     const data = await response.json();
 
     if (!response.ok) {
+      // 404 is expected if webhook logs endpoint doesn't exist - return empty array
+      if (response.status === 404) {
+        console.log('Webhook logs endpoint not found, returning empty array');
+        return [];
+      }
       console.error('getWebhookLogs API error:', {
         status: response.status,
         statusText: response.statusText,
@@ -232,6 +240,11 @@ export const getWebhookLogs = async (limit = 50, event_type = null, phone = null
 
     throw new Error(data.message || 'Failed to fetch webhook logs');
   } catch (error) {
+    // If it's a 404, return empty array instead of throwing
+    if (error.message && error.message.includes('Route not found')) {
+      console.log('Webhook logs route not found, returning empty array');
+      return [];
+    }
     console.error('Error in getWebhookLogs:', error);
     throw error;
   }

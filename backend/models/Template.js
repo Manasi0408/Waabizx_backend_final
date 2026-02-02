@@ -22,7 +22,7 @@ const Template = sequelize.define('Template', {
     }
   },
   category: {
-    type: DataTypes.ENUM('welcome', 'promotional', 'transactional', 'notification', 'other'),
+    type: DataTypes.ENUM('welcome', 'promotional', 'marketing', 'transactional', 'notification', 'other'),
     defaultValue: 'other'
   },
   status: {

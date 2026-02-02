@@ -116,3 +116,35 @@ export const getPaginatedMessages = async (contactId, page = 1, limit = 50) => {
   }
 };
 
+// Send template message
+export const sendTemplateMessage = async (phone, templateName, templateLanguage = 'en_US', templateParams = []) => {
+  try {
+    const token = getToken();
+    if (!token) throw new Error('No token found');
+
+    const response = await fetch(`${API_URL}/messages/send-template`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        phone,
+        templateName,
+        templateLanguage,
+        templateParams
+      })
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      const errorMsg = data.error || data.msg || data.message || 'Failed to send template';
+      console.error('Template send error:', { status: response.status, data });
+      throw new Error(typeof errorMsg === 'string' ? errorMsg : JSON.stringify(errorMsg));
+    }
+    return data;
+  } catch (error) {
+    throw error;
+  }
+};
+

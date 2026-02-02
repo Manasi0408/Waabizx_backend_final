@@ -2,8 +2,50 @@ const { User, Campaign, Contact, InboxMessage } = require('../models');
 const { Op } = require('sequelize');
 
 // Simple chatbot response logic
-const getChatbotResponse = async (message, userId) => {
+const getChatbotResponse = async (message, userId, flowState = null) => {
   const lowerMessage = message.toLowerCase().trim();
+
+  // Handle flow-specific messages
+  if (message === '__START_BOT__') {
+    return {
+      message: "Welcome! 👋 Are you interested in learning more about our services?",
+      buttons: [
+        { id: 1, text: 'YES', value: 'yes' },
+        { id: 2, text: 'NO', value: 'no' }
+      ],
+      flowState: 'template_sent'
+    };
+  }
+
+  if (message === '__YES_CLICKED__') {
+    return {
+      message: "Great! To help you better, could you please tell me your current salary? (Please enter numbers only, e.g., 50000)",
+      flowState: 'asking_salary'
+    };
+  }
+
+  if (message.startsWith('__SALARY_INPUT__:')) {
+    const salaryInput = message.replace('__SALARY_INPUT__:', '').trim();
+    // Validate salary - should be numeric and reasonable
+    const salary = parseFloat(salaryInput);
+    const isValid = !isNaN(salary) && salary > 0 && salary <= 10000000; // Max 10 million
+    
+    if (!isValid) {
+      return {
+        message: "Please enter a valid salary amount. It should be a positive number (e.g., 50000).",
+        isValid: false,
+        flowState: 'salary_retry'
+      };
+    }
+
+    // Valid salary - continue flow
+    return {
+      message: `Thank you! I've recorded your salary as ₹${salary.toLocaleString('en-IN')}. Is there anything else I can help you with today?`,
+      isValid: true,
+      flowState: 'completed',
+      suggestions: ["View Dashboard", "Create Campaign", "View Analytics"]
+    };
+  }
 
   // Greetings
   if (lowerMessage.match(/^(hi|hello|hey|greetings|good morning|good afternoon|good evening)/)) {
@@ -146,7 +188,7 @@ const getChatbotResponse = async (message, userId) => {
 exports.sendMessage = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { message, interactionCount = 0 } = req.body;
+    const { message, interactionCount = 0, flowState = null } = req.body;
 
     if (!message || !message.trim()) {
       return res.status(400).json({
@@ -156,21 +198,41 @@ exports.sendMessage = async (req, res) => {
     }
 
     // Get chatbot response
-    const response = await getChatbotResponse(message.trim(), userId);
+    const response = await getChatbotResponse(message.trim(), userId, flowState);
 
-    // Add suggestions based on interaction count
-    let suggestions = response.suggestions || [];
-    
-    // After 2 interactions, suggest human support
-    if (interactionCount >= 2 && !suggestions.includes('Talk to Human')) {
-      suggestions = [...suggestions, 'Talk to Human'];
+    // Prepare response object
+    const responseObj = {
+      success: true,
+      message: response.message || response.response,
+      flowState: response.flowState || flowState
+    };
+
+    // Add buttons if present (for template messages)
+    if (response.buttons && response.buttons.length > 0) {
+      responseObj.buttons = response.buttons;
     }
 
-    res.json({
-      success: true,
-      response: response.message,
-      suggestions: suggestions
-    });
+    // Add suggestions if present
+    if (response.suggestions && response.suggestions.length > 0) {
+      responseObj.suggestions = response.suggestions;
+    }
+
+    // Add validation result for salary input
+    if (response.isValid !== undefined) {
+      responseObj.isValid = response.isValid;
+    }
+
+    // Add suggestions based on interaction count (only if not in flow)
+    if (!flowState && response.suggestions) {
+      let suggestions = response.suggestions;
+      // After 2 interactions, suggest human support
+      if (interactionCount >= 2 && !suggestions.includes('Talk to Human')) {
+        suggestions = [...suggestions, 'Talk to Human'];
+      }
+      responseObj.suggestions = suggestions;
+    }
+
+    res.json(responseObj);
   } catch (error) {
     console.error('Error in chatbot:', error);
     res.status(500).json({

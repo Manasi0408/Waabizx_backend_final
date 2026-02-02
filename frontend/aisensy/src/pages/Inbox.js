@@ -6,9 +6,11 @@ import { getNotifications, markAsRead as markNotificationAsRead, markAllAsRead }
 import { getInboxList, getContactMessages, sendMessage, markAsRead } from '../services/inboxService';
 import { getInboundMessages, sendMetaMessage, getAllMetaMessages, getWebhookLogs } from '../services/metaMessageService';
 import { initializeSocket, disconnectSocket, joinContactRoom, leaveContactRoom, sendTypingStart, sendTypingStop, onSocketEvent, offSocketEvent } from '../services/socketService';
-import { deleteMessage, forwardMessage, addReaction, searchMessages, getPaginatedMessages } from '../services/messageService';
+import { deleteMessage, forwardMessage, addReaction, searchMessages, getPaginatedMessages, sendTemplateMessage } from '../services/messageService';
 import { uploadMedia, sendMediaMessage } from '../services/mediaService';
 import { updateContact, getContactHistory, updateTypingStatus, updateOnlineStatus } from '../services/contactManagementService';
+import { sendChatbotMessage } from '../services/chatbotService';
+import { getTemplates } from '../services/templateService';
 
 function Inbox() {
   const navigate = useNavigate();
@@ -42,6 +44,10 @@ function Inbox() {
   const [currentPage, setCurrentPage] = useState(1);
   const [uploadingMedia, setUploadingMedia] = useState(false);
   const [showMediaPicker, setShowMediaPicker] = useState(false);
+  const [botFlowState, setBotFlowState] = useState({}); // { phone: flowState }
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [templates, setTemplates] = useState([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
   const dropdownRef = useRef(null);
   const notificationRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -106,7 +112,7 @@ function Inbox() {
       const socket = initializeSocket(user.id, token);
 
       // Set up socket event listeners
-      const handleNewMessage = (message) => {
+      const handleNewMessage = async (message) => {
         console.log('📨 Socket: new-message received', message);
         
         // Check if this message is for the currently selected contact
@@ -117,34 +123,105 @@ function Inbox() {
         );
 
         if (isForSelectedContact) {
+          // Check if bot flow is active and this is an incoming message
+          const phone = selectedContact.phone;
+          const currentFlowState = botFlowState[phone];
+          
+          // Auto-respond to incoming messages if bot flow is active
+          if (message.type === 'incoming' && currentFlowState && currentFlowState !== 'completed') {
+            // Wait a bit before responding (simulate bot thinking)
+            setTimeout(async () => {
+              try {
+                if (currentFlowState === 'template_sent') {
+                  // User responded to template - ask for salary
+                  const response = await sendChatbotMessage('__YES_CLICKED__', 0, currentFlowState);
+                  
+                  // Send bot response as message
+                  const botResponseText = response.message || "Great! To help you better, could you please tell me your current salary? (Please enter numbers only, e.g., 50000)";
+                  await sendMessage(phone, botResponseText);
+                  
+                  // Update flow state
+                  setBotFlowState(prev => ({
+                    ...prev,
+                    [phone]: response.flowState || 'asking_salary'
+                  }));
+                } else if (currentFlowState === 'asking_salary' || currentFlowState === 'salary_retry') {
+                  // User sent salary - validate it
+                  const userMessageText = message.content || '';
+                  const response = await sendChatbotMessage(`__SALARY_INPUT__:${userMessageText}`, 0, currentFlowState);
+                  
+                  if (response.isValid === false) {
+                    // Invalid salary - ask again
+                    await sendMessage(phone, response.message || "Please enter a valid salary amount. It should be a positive number (e.g., 50000).");
+                    setBotFlowState(prev => ({
+                      ...prev,
+                      [phone]: 'salary_retry'
+                    }));
+                  } else {
+                    // Valid salary - continue flow
+                    await sendMessage(phone, response.message || "Thank you! Your information has been recorded. How else can I help you?");
+                    setBotFlowState(prev => ({
+                      ...prev,
+                      [phone]: response.flowState || 'completed'
+                    }));
+                  }
+                }
+              } catch (error) {
+                console.error('Error in auto bot response:', error);
+              }
+            }, 1000); // 1 second delay
+          }
+          
           setMessages(prev => {
-            // Check if message already exists (by ID, temp ID, or content+timestamp)
+            // Normalize content and phone for comparison
+            const normalizeContent = (content) => {
+              return String(content || '').trim().replace(/\s+/g, ' ');
+            };
+            const normalizePhone = (phone) => {
+              return String(phone || '').replace(/\D/g, '');
+            };
+            
+            const msgContent = normalizeContent(message.content);
+            const msgPhone = normalizePhone(message.phone || selectedContact?.phone || '');
+            const msgContactId = String(message.contactId || '');
+            const msgTimestamp = new Date(message.sentAt || message.createdAt || 0).getTime();
+            
+            // Check if message already exists (by ID, waMessageId, or content+timestamp+contact)
             const exists = prev.find(m => {
               // Exact ID match (most reliable)
-              if (m.id === message.id) return true;
+              if (m.id === message.id && message.id) return true;
               
-              // For incoming messages: match by content + time + contact (prevent duplicates)
+              // Match by waMessageId if available (WhatsApp message ID is globally unique)
+              if (m.waMessageId && message.waMessageId && m.waMessageId === message.waMessageId) {
+                return true;
+              }
+              
+              // For incoming messages: very strict matching to prevent duplicates
               if (message.type === 'incoming' && m.type === 'incoming') {
-                // Check if content matches
-                if (m.content === message.content || 
-                    (m.content && message.content && m.content.trim() === message.content.trim())) {
+                const mContent = normalizeContent(m.content);
+                const mPhone = normalizePhone(m.phone || selectedContact?.phone || '');
+                const mContactId = String(m.contactId || '');
+                const mTimestamp = new Date(m.sentAt || m.createdAt || 0).getTime();
+                
+                // Check if content matches (normalized)
+                if (mContent === msgContent) {
                   // Check if same contact (by ID, phone, or normalized phone)
                   const sameContact = 
-                    m.contactId === message.contactId || 
-                    m.phone === message.phone ||
-                    (m.phone && message.phone && m.phone.replace(/\D/g, '') === message.phone.replace(/\D/g, ''));
+                    mContactId === msgContactId || 
+                    mPhone === msgPhone ||
+                    (mPhone && msgPhone && mPhone === msgPhone);
                   
                   if (sameContact) {
-                    // Check if timestamp is close (within 15 seconds)
-                    const timeDiff = Math.abs(
-                      new Date(m.sentAt || m.createdAt || 0) - new Date(message.sentAt || message.createdAt || 0)
-                    );
-                    if (timeDiff < 15000) {
+                    // Check if timestamp is close (within 60 seconds - increased window for socket events)
+                    const timeDiff = Math.abs(mTimestamp - msgTimestamp);
+                    if (timeDiff < 60000) {
                       console.log('🔄 Socket: Incoming message duplicate detected:', {
                         existingId: m.id,
                         newId: message.id,
-                        content: message.content.substring(0, 30),
-                        timeDiff: timeDiff
+                        content: msgContent.substring(0, 30),
+                        timeDiff: timeDiff,
+                        existingSource: m.source,
+                        newSource: message.source
                       });
                       return true; // Duplicate found
                     }
@@ -153,22 +230,18 @@ function Inbox() {
               }
               
               // For outgoing messages: match by content + time (to replace optimistic messages)
-              if (message.type === 'outgoing' && m.content === message.content) {
-                const timeDiff = Math.abs(
-                  new Date(m.sentAt || m.createdAt) - new Date(message.sentAt || message.createdAt)
-                );
-                if (timeDiff < 5000) return true; // Within 5 seconds
-              }
-              
-              // Match by content + phone for outgoing messages from same contact
-              if (message.type === 'outgoing' && 
-                  m.type === 'outgoing' && 
-                  m.content === message.content &&
-                  (m.phone === message.phone || m.contactId === message.contactId)) {
-                const timeDiff = Math.abs(
-                  new Date(m.sentAt || m.createdAt) - new Date(message.sentAt || message.createdAt)
-                );
-                if (timeDiff < 5000) return true;
+              if (message.type === 'outgoing' && m.type === 'outgoing') {
+                const mContent = normalizeContent(m.content);
+                if (mContent === msgContent) {
+                  const mTimestamp = new Date(m.sentAt || m.createdAt || 0).getTime();
+                  const timeDiff = Math.abs(mTimestamp - msgTimestamp);
+                  if (timeDiff < 10000) return true; // Within 10 seconds
+                }
+                
+                // Also match by waMessageId for outgoing
+                if (m.waMessageId && message.waMessageId && m.waMessageId === message.waMessageId) {
+                  return true;
+                }
               }
               
               return false;
@@ -176,13 +249,14 @@ function Inbox() {
             
             if (exists) {
               // Update existing message (replace optimistic with real one OR prevent duplicate)
-              console.log('🔄 Duplicate message detected - preventing duplicate:', {
+              console.log('🔄 Socket: Duplicate message detected - preventing duplicate:', {
                 messageId: message.id,
                 type: message.type,
-                content: message.content.substring(0, 30)
+                content: msgContent.substring(0, 30),
+                waMessageId: message.waMessageId
               });
               
-              // For incoming messages: just return prev (don't update, already exists)
+              // For incoming messages: just return prev (don't add duplicate)
               if (message.type === 'incoming') {
                 return prev;
               }
@@ -191,17 +265,42 @@ function Inbox() {
               return prev.map(m => {
                 // Match by ID
                 if (m.id === message.id) {
-                  return { ...message, isOptimistic: false, source: 'socket' };
+                  // Preserve template content if it's a template message
+                  const updatedMessage = { ...message, isOptimistic: false, source: 'socket' };
+                  if (m.isTemplate && m.templateName && message.content?.startsWith('Template:')) {
+                    updatedMessage.content = m.content; // Keep the actual template content
+                    updatedMessage.isTemplate = true;
+                    updatedMessage.templateName = m.templateName;
+                  }
+                  return updatedMessage;
                 }
                 
-                // Match optimistic message by content + time
-                if (m.isOptimistic && message.type === 'outgoing' && m.content === message.content) {
-                  const timeDiff = Math.abs(
-                    new Date(m.sentAt || m.createdAt) - new Date(message.sentAt || message.createdAt)
-                  );
-                  if (timeDiff < 5000) {
-                    return { ...message, isOptimistic: false, source: 'socket' };
+                // Match optimistic message by content + time or waMessageId (for templates)
+                if (m.isOptimistic && message.type === 'outgoing') {
+                  const contentMatch = m.content === message.content;
+                  const waMessageIdMatch = m.waMessageId && message.waMessageId && m.waMessageId === message.waMessageId;
+                  const templateMatch = m.isTemplate && message.content?.startsWith('Template:') && m.templateName;
+                  
+                  if (contentMatch || waMessageIdMatch || templateMatch) {
+                    const timeDiff = Math.abs(
+                      new Date(m.sentAt || m.createdAt) - new Date(message.sentAt || message.createdAt)
+                    );
+                    if (timeDiff < 5000) {
+                      // Preserve template content if it's a template message
+                      const updatedMessage = { ...message, isOptimistic: false, source: 'socket' };
+                      if (m.isTemplate && m.templateName && message.content?.startsWith('Template:')) {
+                        updatedMessage.content = m.content; // Keep the actual template content
+                        updatedMessage.isTemplate = true;
+                        updatedMessage.templateName = m.templateName;
+                      }
+                      return updatedMessage;
+                    }
                   }
+                }
+                
+                // Also update by waMessageId for template messages
+                if (m.isTemplate && message.waMessageId && m.waMessageId === message.waMessageId) {
+                  return { ...m, ...message, content: m.content, isOptimistic: false, source: 'socket' };
                 }
                 
                 return m;
@@ -212,11 +311,48 @@ function Inbox() {
               });
             }
             
-            // Add new message (doesn't exist yet)
+            // Message doesn't exist - add it (but double-check for duplicates first)
+            // Final check: make sure we're not adding a duplicate by content+time+contact
+            const isDuplicate = prev.some(m => {
+              if (message.type === 'incoming' && m.type === 'incoming') {
+                const mContent = normalizeContent(m.content);
+                const mPhone = normalizePhone(m.phone || selectedContact?.phone || '');
+                const mContactId = String(m.contactId || '');
+                const mTimestamp = new Date(m.sentAt || m.createdAt || 0).getTime();
+                
+                if (mContent === msgContent) {
+                  const sameContact = 
+                    mContactId === msgContactId || 
+                    mPhone === msgPhone ||
+                    (mPhone && msgPhone && mPhone === msgPhone);
+                  
+                  if (sameContact) {
+                    const timeDiff = Math.abs(mTimestamp - msgTimestamp);
+                    if (timeDiff < 60000) {
+                      console.log('🔄 Socket: Final duplicate check - preventing duplicate:', {
+                        existingId: m.id,
+                        newId: message.id,
+                        content: msgContent.substring(0, 30)
+                      });
+                      return true;
+                    }
+                  }
+                }
+              }
+              return false;
+            });
+            
+            if (isDuplicate) {
+              console.log('🔄 Socket: Duplicate prevented at final check');
+              return prev;
+            }
+            
+            // Message is truly new - add it
             console.log('➕ Adding new message from socket:', {
               messageId: message.id,
               type: message.type,
-              content: message.content.substring(0, 30)
+              content: msgContent.substring(0, 30),
+              waMessageId: message.waMessageId
             });
             return [...prev, { ...message, isOptimistic: false, source: 'socket' }].sort((a, b) => {
               const dateA = new Date(a.sentAt || a.createdAt || 0);
@@ -528,21 +664,40 @@ function Inbox() {
         
         // Create a copy of allMessages to avoid mutating the outer variable
         let processedMessages = allMessages.map((msg, index) => {
+          // Ensure content field exists (convert from message field if needed)
+          const messageContent = msg.content || msg.message || '';
+          
           if (!msg.id) {
             // Generate a unique ID if missing
             const timestamp = new Date(msg.sentAt || msg.createdAt || Date.now()).getTime();
             const source = msg.source || 'message';
-            return { ...msg, id: `${source}_${timestamp}_${index}` };
+            return { ...msg, id: `${source}_${timestamp}_${index}`, content: messageContent };
           }
-          return msg;
+          return { ...msg, content: messageContent };
         });
         
         // Combine fetched messages with optimistic messages
         const combinedMessages = [...processedMessages, ...optimisticMessages];
         
-        // Remove duplicates and sort by timestamp
-        const uniqueMessages = [];
-        const seenIds = new Set();
+        // Helper function to determine message priority (lower = higher priority)
+        const getMessagePriority = (msg) => {
+          if (msg.waMessageId) return 1; // WhatsApp message ID is most reliable
+          if (!msg.source || msg.source === 'message' || msg.source === 'socket') return 2; // Message table
+          if (msg.source === 'inbox_message') return 3; // InboxMessage table
+          if (msg.source === 'meta_message') return 4; // Meta messages
+          if (msg.source === 'webhook_log') return 5; // Webhook logs
+          return 6; // Other sources
+        };
+        
+        // Normalize content for comparison
+        const normalizeContent = (content) => {
+          return String(content || '').trim().replace(/\s+/g, ' ');
+        };
+        
+        // Normalize phone for comparison
+        const normalizePhone = (phone) => {
+          return String(phone || '').replace(/\D/g, '');
+        };
         
         // Sort all messages by timestamp first
         combinedMessages.sort((a, b) => {
@@ -551,85 +706,110 @@ function Inbox() {
           return dateA - dateB;
         });
         
-        // Remove duplicates (prefer server messages over optimistic ones, prevent socket duplicates)
+        // Use a Map for efficient deduplication
+        const messageMap = new Map();
+        const currentPhone = normalizePhone(selectedContact?.phone || phone || '');
+        
         for (const msg of combinedMessages) {
-          // Create deduplication key based on multiple factors
           const msgTimestamp = new Date(msg.sentAt || msg.createdAt || 0).getTime();
-          const msgContent = String(msg.content || '');
+          const msgContent = normalizeContent(msg.content);
           const msgType = String(msg.type || '');
           const msgContactId = String(msg.contactId || '');
-          const msgPhone = String(msg.phone || '');
+          const msgPhone = normalizePhone(msg.phone || selectedContact?.phone || '');
           
-          // Primary dedup key: ID if available (always convert to string)
-          let dedupKey = msg.id ? String(msg.id) : '';
-          
-          // Secondary dedup key: content + timestamp + type + contact (for incoming messages especially)
-          // Check if we need to generate a key (no ID, or ID is a temp/prefixed ID)
-          if (!dedupKey || (typeof dedupKey === 'string' && (dedupKey.startsWith('meta_') || dedupKey.startsWith('webhook_') || dedupKey.startsWith('temp_')))) {
-            // For incoming messages: use content + time + type + contact (prevent duplicates)
-            if (msgType === 'incoming') {
-              dedupKey = `incoming_${msgContent}_${msgTimestamp}_${msgContactId || msgPhone}`;
+          // Primary dedup key: waMessageId (most reliable, globally unique)
+          let dedupKey = null;
+          if (msg.waMessageId) {
+            dedupKey = `wa_${msg.waMessageId}`;
+          } else if (msg.id) {
+            const msgIdStr = String(msg.id);
+            // For prefixed IDs (meta_, webhook_, temp_), use content-based key
+            if (msgIdStr.startsWith('meta_') || msgIdStr.startsWith('webhook_') || msgIdStr.startsWith('temp_')) {
+              dedupKey = `${msgType}_${msgContent}_${msgTimestamp}_${msgContactId || msgPhone || currentPhone}`;
             } else {
-              // For outgoing: use content + time
-              dedupKey = `outgoing_${msgContent}_${msgTimestamp}`;
+              // For regular IDs, use ID + contact (same ID might exist in different tables)
+              dedupKey = `id_${msgIdStr}_${msgContactId || msgPhone || currentPhone}`;
             }
+          } else {
+            // Fallback: content + timestamp + contact
+            dedupKey = `${msgType}_${msgContent}_${msgTimestamp}_${msgContactId || msgPhone || currentPhone}`;
           }
           
-          // Ensure dedupKey is always a string (safety check)
-          dedupKey = String(dedupKey || '');
+          // Check if we've seen this message before
+          const existingMsg = messageMap.get(dedupKey);
           
-          // Check if we've seen this message before (by ID or content+time+contact)
-          const isDuplicate = uniqueMessages.some(existingMsg => {
-            // Exact ID match
-            if (existingMsg.id === msg.id && msg.id) {
-              return true;
-            }
+          if (existingMsg) {
+            // Duplicate found - prefer message with higher priority
+            const existingPriority = getMessagePriority(existingMsg);
+            const newPriority = getMessagePriority(msg);
             
-            // For incoming messages: match by content + timestamp + contact
-            if (msgType === 'incoming' && existingMsg.type === 'incoming') {
-              if (existingMsg.content === msgContent) {
-                const timeDiff = Math.abs(
-                  new Date(existingMsg.sentAt || existingMsg.createdAt || 0).getTime() - msgTimestamp
-                );
-                // Match if same content, same contact, and within 10 seconds
-                if (timeDiff < 10000 && (
-                  existingMsg.contactId === msgContactId || 
-                  existingMsg.phone === msgPhone ||
-                  (existingMsg.phone && msgPhone && existingMsg.phone.replace(/\D/g, '') === msgPhone.replace(/\D/g, ''))
-                )) {
-                  return true;
-                }
-              }
+            if (newPriority < existingPriority) {
+              console.log('🔄 Replacing duplicate (higher priority):', {
+                oldId: existingMsg.id,
+                newId: msg.id,
+                oldSource: existingMsg.source,
+                newSource: msg.source,
+                content: msgContent.substring(0, 30)
+              });
+              messageMap.set(dedupKey, msg);
+            } else {
+              console.log('🔄 Duplicate filtered out (lower priority):', {
+                id: msg.id,
+                type: msgType,
+                content: msgContent.substring(0, 30),
+                source: msg.source
+              });
             }
-            
-            // For outgoing messages: match by content + timestamp
-            if (msgType === 'outgoing' && existingMsg.type === 'outgoing') {
-              if (existingMsg.content === msgContent) {
-                const timeDiff = Math.abs(
-                  new Date(existingMsg.sentAt || existingMsg.createdAt || 0).getTime() - msgTimestamp
-                );
-                if (timeDiff < 5000) {
-                  return true;
-                }
-              }
-            }
-            
-            return false;
-          });
-          
-          if (isDuplicate) {
-            console.log('🔄 Duplicate message filtered out:', {
-              id: msg.id,
-              type: msgType,
-              content: msgContent.substring(0, 30),
-              source: msg.source
-            });
             continue;
           }
           
-          seenIds.add(dedupKey);
-          uniqueMessages.push(msg);
+          // Also check for content-based duplicates (same content, same contact, close timestamp)
+          let isContentDuplicate = false;
+          for (const [key, existingMsg] of messageMap.entries()) {
+            // Skip ID-based keys for content matching
+            if (key.startsWith('wa_') || key.startsWith('id_')) continue;
+            
+            const existingContent = normalizeContent(existingMsg.content);
+            const existingTimestamp = new Date(existingMsg.sentAt || existingMsg.createdAt || 0).getTime();
+            const existingContactId = String(existingMsg.contactId || '');
+            const existingPhone = normalizePhone(existingMsg.phone || selectedContact?.phone || '');
+            
+            // Check if same type, same content, same contact, and within 30 seconds
+            if (existingMsg.type === msgType && 
+                existingContent === msgContent &&
+                (existingContactId === msgContactId || existingPhone === msgPhone || 
+                 (existingPhone && msgPhone && existingPhone === msgPhone)) &&
+                Math.abs(existingTimestamp - msgTimestamp) < 30000) {
+              isContentDuplicate = true;
+              const existingPriority = getMessagePriority(existingMsg);
+              const newPriority = getMessagePriority(msg);
+              
+              if (newPriority < existingPriority) {
+                // Replace with higher priority message
+                messageMap.delete(key);
+                messageMap.set(dedupKey, msg);
+                console.log('🔄 Replacing duplicate by content (higher priority):', {
+                  oldId: existingMsg.id,
+                  newId: msg.id,
+                  content: msgContent.substring(0, 30)
+                });
+              } else {
+                console.log('🔄 Duplicate by content filtered out:', {
+                  id: msg.id,
+                  content: msgContent.substring(0, 30)
+                });
+              }
+              break;
+            }
+          }
+          
+          if (!isContentDuplicate) {
+            messageMap.set(dedupKey, msg);
+          }
         }
+        
+        // Convert map to array
+        const uniqueMessages = Array.from(messageMap.values());
         
         console.log('Final merged messages count:', uniqueMessages.length, 'Optimistic:', optimisticMessages.length, 'All messages:', allMessages.length);
         
@@ -800,11 +980,21 @@ function Inbox() {
     e.preventDefault();
     if (!messageText.trim() || !selectedContact || sending) return;
 
+    const phone = selectedContact.phone;
+    const currentFlowState = botFlowState[phone];
+
+    // Prevent manual sending when bot flow is active
+    if (currentFlowState && currentFlowState !== 'completed') {
+      console.log('🚫 Manual sending disabled - bot is handling conversation');
+      alert('Bot is currently handling this conversation. Please wait for the bot to complete.');
+      return;
+    }
+
     // Stop typing indicator
     handleTypingStop();
 
     const text = messageText.trim();
-    const phone = selectedContact.phone;
+
     setMessageText('');
     setSending(true);
 
@@ -899,8 +1089,280 @@ function Inbox() {
     setHasMoreMessages(true);
     setMessageSearchQuery('');
     setSearchResults([]);
+    // Note: Don't reset botFlowState here - keep it per contact so flow continues
     
     // The useEffect will handle joining contact room and fetching messages
+  };
+
+  // Fetch approved templates
+  const fetchApprovedTemplates = async () => {
+    try {
+      setLoadingTemplates(true);
+      const result = await getTemplates({ status: 'approved', limit: 100 });
+      setTemplates(result.templates || []);
+    } catch (error) {
+      console.error('Error fetching templates:', error);
+      alert('Failed to fetch templates: ' + error.message);
+    } finally {
+      setLoadingTemplates(false);
+    }
+  };
+
+  // Handle Start Bot flow - show template modal
+  const handleStartBot = async () => {
+    if (!selectedContact || sending) return;
+    
+    // Fetch approved templates and show modal
+    await fetchApprovedTemplates();
+    setShowTemplateModal(true);
+  };
+
+  // Handle template selection
+  const handleTemplateSelect = async (template) => {
+    if (!selectedContact || sending) return;
+
+    const phone = selectedContact.phone;
+    setSending(true);
+    setShowTemplateModal(false);
+
+    try {
+      // Send template via API to user's phone
+      const templateName = template.name || template.templateName;
+      const templateLanguage = template.language || 'en_US';
+      
+      // Ensure templateParams is always an array
+      let templateParams = [];
+      if (template.variables) {
+        if (Array.isArray(template.variables)) {
+          templateParams = template.variables;
+        } else if (typeof template.variables === 'string') {
+          try {
+            templateParams = JSON.parse(template.variables);
+            if (!Array.isArray(templateParams)) {
+              templateParams = [];
+            }
+          } catch (e) {
+            templateParams = [];
+          }
+        } else if (typeof template.variables === 'object') {
+          // Convert object to array of values
+          templateParams = Object.values(template.variables);
+        }
+      }
+      
+      const response = await sendTemplateMessage(phone, templateName, templateLanguage, templateParams);
+      
+      // Get template content for display
+      const templateContent = template.content || `Template: ${templateName}`;
+      
+      // Add template message to chat immediately (optimistic update)
+      const templateMessage = {
+        id: response.messageId || `template_${Date.now()}`,
+        content: templateContent,
+        type: 'outgoing',
+        status: 'sent',
+        sentAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        source: 'api',
+        phone: phone,
+        contactId: selectedContact.id,
+        waMessageId: response.waMessageId || null,
+        isTemplate: true,
+        templateName: templateName
+      };
+
+      setMessages(prev => {
+        // Check if message already exists
+        const exists = prev.find(m => 
+          m.id === templateMessage.id || 
+          (m.waMessageId && m.waMessageId === templateMessage.waMessageId) ||
+          (m.content === templateContent && m.type === 'outgoing' && m.isTemplate && Math.abs(new Date(m.sentAt || m.createdAt) - new Date(templateMessage.sentAt)) < 5000)
+        );
+        if (exists) {
+          console.log('Template message already exists, skipping duplicate');
+          return prev;
+        }
+        
+        console.log('Adding template message to chat:', templateMessage);
+        const updatedMessages = [...prev, templateMessage].sort((a, b) => {
+          const dateA = new Date(a.sentAt || a.createdAt || 0);
+          const dateB = new Date(b.sentAt || b.createdAt || 0);
+          return dateA - dateB;
+        });
+        
+        return updatedMessages;
+      });
+      
+      // Set flow state to wait for user response
+      setBotFlowState(prev => ({
+        ...prev,
+        [phone]: 'template_sent'
+      }));
+
+      // Refresh inbox list
+      fetchInboxList(false);
+      
+      // Refresh messages after a short delay to ensure we get the saved message from backend
+      // Socket will also update it when it arrives
+      setTimeout(() => {
+        if (selectedContact?.phone) {
+          fetchMessages(selectedContact.phone, false).catch(err => {
+            console.error('Error refreshing messages after template send:', err);
+          });
+        }
+      }, 1000);
+    } catch (error) {
+      console.error('Error sending template:', error);
+      alert('Failed to send template: ' + error.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // Handle bot button click
+  const handleBotButtonClick = async (buttonValue, message) => {
+    if (!selectedContact || sending) return;
+
+    const phone = selectedContact.phone;
+    const currentFlowState = botFlowState[phone];
+
+    // Handle YES button click
+    if (currentFlowState === 'template_sent' && buttonValue === 'yes') {
+      setSending(true);
+      try {
+        const response = await sendChatbotMessage('__YES_CLICKED__', 0, currentFlowState);
+        
+        // Add user's selection as outgoing message
+        const userMessage = {
+          id: `user_${Date.now()}`,
+          content: 'YES',
+          type: 'outgoing',
+          status: 'sent',
+          sentAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          source: 'user',
+          phone: phone,
+          contactId: selectedContact.id
+        };
+
+        // Add bot's response as incoming message
+        const botResponse = {
+          id: `bot_${Date.now()}`,
+          content: response.message || "Great! To help you better, could you please tell me your current salary? (Please enter numbers only, e.g., 50000)",
+          type: 'incoming',
+          status: 'read',
+          sentAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          source: 'bot',
+          phone: phone,
+          contactId: selectedContact.id
+        };
+
+        setMessages(prev => {
+          const newMessages = [...prev, userMessage, botResponse];
+          return newMessages.sort((a, b) => {
+            const dateA = new Date(a.sentAt || a.createdAt || 0);
+            const dateB = new Date(b.sentAt || b.createdAt || 0);
+            return dateA - dateB;
+          });
+        });
+
+        setBotFlowState(prev => ({
+          ...prev,
+          [phone]: response.flowState || 'asking_salary'
+        }));
+
+        fetchInboxList(false);
+      } catch (error) {
+        console.error('Error handling bot button:', error);
+        alert('Failed to process: ' + error.message);
+      } finally {
+        setSending(false);
+      }
+    }
+  };
+
+  // Handle salary input in message
+  const handleSalaryInput = async (salaryText) => {
+    if (!selectedContact || sending) return;
+
+    const phone = selectedContact.phone;
+    const currentFlowState = botFlowState[phone];
+
+    if (currentFlowState === 'asking_salary' || currentFlowState === 'salary_retry') {
+      setSending(true);
+      try {
+        const response = await sendChatbotMessage(`__SALARY_INPUT__:${salaryText}`, 0, currentFlowState);
+        
+        if (response.isValid === false) {
+          // Invalid salary - add bot error message
+          const botError = {
+            id: `bot_${Date.now()}`,
+            content: response.message || "Please enter a valid salary amount. It should be a positive number (e.g., 50000).",
+            type: 'incoming',
+            status: 'read',
+            sentAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            source: 'bot',
+            phone: phone,
+            contactId: selectedContact.id
+          };
+
+          setMessages(prev => {
+            const newMessages = [...prev, botError];
+            return newMessages.sort((a, b) => {
+              const dateA = new Date(a.sentAt || a.createdAt || 0);
+              const dateB = new Date(b.sentAt || b.createdAt || 0);
+              return dateA - dateB;
+            });
+          });
+
+          setBotFlowState(prev => ({
+            ...prev,
+            [phone]: 'salary_retry'
+          }));
+        } else {
+          // Valid salary - continue flow
+          const botSuccess = {
+            id: `bot_${Date.now()}`,
+            content: response.message || "Thank you! Your information has been recorded. How else can I help you?",
+            type: 'incoming',
+            status: 'read',
+            sentAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            source: 'bot',
+            phone: phone,
+            contactId: selectedContact.id,
+            buttons: response.suggestions?.map((sug, idx) => ({
+              id: Date.now() + idx,
+              text: sug,
+              value: sug.toLowerCase().replace(/\s+/g, '_')
+            })) || undefined
+          };
+
+          setMessages(prev => {
+            const newMessages = [...prev, botSuccess];
+            return newMessages.sort((a, b) => {
+              const dateA = new Date(a.sentAt || a.createdAt || 0);
+              const dateB = new Date(b.sentAt || b.createdAt || 0);
+              return dateA - dateB;
+            });
+          });
+
+          setBotFlowState(prev => ({
+            ...prev,
+            [phone]: response.flowState || 'completed'
+          }));
+        }
+
+        fetchInboxList(false);
+      } catch (error) {
+        console.error('Error handling salary input:', error);
+        alert('Failed to process: ' + error.message);
+      } finally {
+        setSending(false);
+      }
+    }
   };
 
   // Typing indicator handlers
@@ -1696,6 +2158,22 @@ function Inbox() {
 
                               <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
                               
+                              {/* Bot Buttons */}
+                              {message.buttons && message.buttons.length > 0 && message.type === 'incoming' && (
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  {message.buttons.map((button) => (
+                                    <button
+                                      key={button.id}
+                                      onClick={() => handleBotButtonClick(button.value, message)}
+                                      disabled={sending}
+                                      className="px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold rounded-lg border border-blue-200 shadow-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-md"
+                                    >
+                                      {button.text}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                              
                               {/* Reactions */}
                               {message.reactions && message.reactions.length > 0 && (
                                 <div className="flex flex-wrap gap-1 mt-2">
@@ -1794,6 +2272,21 @@ function Inbox() {
                 {/* Message Input */}
                 <div className="bg-white border-t border-gray-200 px-6 py-4">
                   <form onSubmit={handleSendMessage} className="flex items-center gap-3">
+                    {/* Start Bot button */}
+                    {selectedContact && !botFlowState[selectedContact.phone] && (
+                      <button
+                        type="button"
+                        onClick={handleStartBot}
+                        disabled={sending}
+                        className="px-3 py-2 bg-green-600 text-white text-xs font-semibold rounded-lg hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                        title="Start Bot"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        Start Bot
+                      </button>
+                    )}
                     {/* Media picker button */}
                     <button
                       type="button"
@@ -1822,34 +2315,53 @@ function Inbox() {
                       }}
                     />
                     
-                    <input
-                      type="text"
-                      value={messageText}
-                      onChange={handleMessageInputChange}
-                      onBlur={handleTypingStop}
-                      placeholder="Type a message..."
-                      className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                      disabled={sending}
-                    />
-                    <button
-                      type="submit"
-                      disabled={!messageText.trim() || sending}
-                      className="px-6 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                    >
-                      {sending ? (
+                    {(() => {
+                      const phone = selectedContact?.phone;
+                      const currentFlowState = botFlowState[phone];
+                      const isBotActive = currentFlowState && currentFlowState !== 'completed';
+                      
+                      return (
                         <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                          <span>Sending...</span>
+                          {isBotActive && (
+                            <div className="w-full mb-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                              <span className="text-sm text-blue-700 font-medium">
+                                Bot is handling this conversation. Manual sending is disabled.
+                              </span>
+                            </div>
+                          )}
+                          <input
+                            type="text"
+                            value={messageText}
+                            onChange={handleMessageInputChange}
+                            onBlur={handleTypingStop}
+                            placeholder={isBotActive ? "Bot is handling this conversation..." : "Type a message..."}
+                            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                            disabled={sending || isBotActive}
+                          />
+                          <button
+                            type="submit"
+                            disabled={!messageText.trim() || sending || isBotActive}
+                            className="px-6 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                            title={isBotActive ? "Bot is handling this conversation" : ""}
+                          >
+                            {sending ? (
+                              <>
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                                <span>Sending...</span>
+                              </>
+                            ) : (
+                              <>
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                </svg>
+                                <span>Send</span>
+                              </>
+                            )}
+                          </button>
                         </>
-                      ) : (
-                        <>
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                          </svg>
-                          <span>Send</span>
-                        </>
-                      )}
-                    </button>
+                      );
+                    })()}
                   </form>
                   
                   {/* Upload progress */}
@@ -2005,6 +2517,86 @@ function Inbox() {
                 className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
               >
                 Forward
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Template Selection Modal */}
+      {showTemplateModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-gray-900">Select Template</h2>
+              <button
+                onClick={() => setShowTemplateModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {loadingTemplates ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                  <p className="ml-3 text-gray-600">Loading templates...</p>
+                </div>
+              ) : templates.length === 0 ? (
+                <div className="text-center py-12">
+                  <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <p className="text-gray-600 font-medium">No approved templates found</p>
+                  <p className="text-sm text-gray-500 mt-2">Please create and approve templates first</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-4">
+                  {templates.map((template) => (
+                    <button
+                      key={template.id}
+                      onClick={() => handleTemplateSelect(template)}
+                      className="text-left p-4 border border-gray-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-all duration-200"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-2">
+                            <h3 className="font-semibold text-gray-900">{template.name}</h3>
+                            <span className="px-2 py-1 bg-green-100 text-green-800 text-xs font-medium rounded">
+                              Approved
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-600 mb-2 line-clamp-3 whitespace-pre-wrap">
+                            {template.content || 'No content'}
+                          </p>
+                          {template.category && (
+                            <span className="inline-block px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded">
+                              {template.category}
+                            </span>
+                          )}
+                        </div>
+                        <svg className="w-5 h-5 text-gray-400 ml-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-end">
+              <button
+                onClick={() => setShowTemplateModal(false)}
+                className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition"
+              >
+                Cancel
               </button>
             </div>
           </div>

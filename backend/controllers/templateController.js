@@ -32,6 +32,15 @@ exports.createTemplate = async (req, res) => {
 // Submit template to Meta API for approval
 exports.createMetaTemplate = async (req, res) => {
   try {
+    // Check if user is authenticated
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+        error: 'User not authenticated'
+      });
+    }
+    
     const userId = req.user.id;
     const { name, category, language = "en_US", components } = req.body;
 
@@ -188,6 +197,11 @@ exports.createMetaTemplate = async (req, res) => {
         }
       );
       console.log('✅ Template submitted to Meta API:', response.data);
+      
+      // Validate response structure
+      if (!response || !response.data) {
+        throw new Error('Invalid response from Meta API: response.data is undefined');
+      }
     } catch (apiError) {
       console.error("Meta API Error:", apiError?.response?.data || apiError.message);
       const errorMsg = apiError?.response?.data?.error?.message || apiError.message || "Failed to submit template";
@@ -219,7 +233,7 @@ exports.createMetaTemplate = async (req, res) => {
 
     // Map Meta category to our category enum
     let localCategory = 'other';
-    if (metaCategory === 'MARKETING') localCategory = 'promotional';
+    if (metaCategory === 'MARKETING') localCategory = 'marketing';
     else if (metaCategory === 'UTILITY') localCategory = 'transactional';
     else if (metaCategory === 'AUTHENTICATION') localCategory = 'notification';
 
@@ -262,14 +276,30 @@ exports.createMetaTemplate = async (req, res) => {
     }
 
     // Meta API response contains template ID and status
-    const metaTemplateId = response.data.id;
-    const metaStatus = response.data.status || 'PENDING';
+    const metaTemplateId = response?.data?.id || null;
+    const metaStatus = response?.data?.status || 'PENDING';
+    const rejectionReason = response?.data?.rejection_reason || null;
+    const qualityRating = response?.data?.quality_rating || null;
+
+    // Log rejection details if available
+    if (metaStatus === 'REJECTED') {
+      console.error('❌ Template REJECTED by Meta:', {
+        templateId: metaTemplateId,
+        rejectionReason: rejectionReason,
+        qualityRating: qualityRating,
+        fullResponse: JSON.stringify(response.data, null, 2)
+      });
+    }
 
     return res.json({
       success: true,
-      message: "Template submitted to Meta for approval",
+      message: metaStatus === 'REJECTED' 
+        ? "Template submitted but REJECTED by Meta. Check rejectionReason for details."
+        : "Template submitted to Meta for approval",
       metaTemplateId: metaTemplateId,
       status: metaStatus,
+      rejectionReason: rejectionReason,
+      qualityRating: qualityRating,
       template: template || null
     });
   } catch (error) {
@@ -463,7 +493,7 @@ exports.getMetaTemplates = async (req, res) => {
 
         // Map Meta category to our category enum
         let category = 'other';
-        if (metaTemplate.category === 'MARKETING') category = 'promotional';
+        if (metaTemplate.category === 'MARKETING') category = 'marketing';
         else if (metaTemplate.category === 'UTILITY') category = 'transactional';
         else if (metaTemplate.category === 'AUTHENTICATION') category = 'notification';
 
@@ -534,6 +564,62 @@ exports.getMetaTemplates = async (req, res) => {
       success: false,
       message: "Failed to fetch templates",
       error: error.response?.data || error.message
+    });
+  }
+};
+
+// Get detailed template information from Meta (including rejection reasons)
+exports.getMetaTemplateDetails = async (req, res) => {
+  try {
+    const { templateId } = req.params; // Meta template ID
+    
+    const WABA_ID = process.env.WABA_ID;
+    const TOKEN = process.env.WHATSAPP_TOKEN || process.env.Whatsapp_Token;
+
+    if (!WABA_ID || !TOKEN) {
+      return res.status(400).json({
+        success: false,
+        message: 'WABA_ID and WHATSAPP_TOKEN are required in environment variables'
+      });
+    }
+
+    if (!templateId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Template ID is required'
+      });
+    }
+
+    const url = `https://graph.facebook.com/v21.0/${templateId}`;
+
+    try {
+      const response = await axios.get(url, {
+        headers: {
+          Authorization: `Bearer ${TOKEN}`
+        },
+        params: {
+          fields: 'id,name,status,category,language,components'
+        }
+      });
+
+      return res.json({
+        success: true,
+        template: response.data
+      });
+    } catch (apiError) {
+      console.error("Meta API Error:", apiError?.response?.data || apiError.message);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch template details from Meta",
+        error: apiError?.response?.data || apiError.message
+      });
+    }
+  } catch (error) {
+    console.error("Get Meta Template Details Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to get template details",
+      error: error.message
     });
   }
 };

@@ -311,6 +311,7 @@ function Templates() {
     switch (category) {
       case 'welcome': return 'Welcome';
       case 'promotional': return 'Promotional';
+      case 'marketing': return 'Marketing';
       case 'transactional': return 'Transactional';
       case 'notification': return 'Notification';
       case 'other': return 'Other';
@@ -703,6 +704,7 @@ function Templates() {
                   <option value="">All Categories</option>
                   <option value="welcome">Welcome</option>
                   <option value="promotional">Promotional</option>
+                  <option value="marketing">Marketing</option>
                   <option value="transactional">Transactional</option>
                   <option value="notification">Notification</option>
                   <option value="other">Other</option>
@@ -896,6 +898,7 @@ function Templates() {
                   >
                     <option value="welcome">Welcome</option>
                     <option value="promotional">Promotional</option>
+                    <option value="marketing">Marketing</option>
                     <option value="transactional">Transactional</option>
                     <option value="notification">Notification</option>
                     <option value="other">Other</option>
@@ -996,6 +999,7 @@ function Templates() {
                   >
                     <option value="welcome">Welcome</option>
                     <option value="promotional">Promotional</option>
+                    <option value="marketing">Marketing</option>
                     <option value="transactional">Transactional</option>
                     <option value="notification">Notification</option>
                     <option value="other">Other</option>

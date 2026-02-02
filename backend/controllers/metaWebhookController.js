@@ -418,7 +418,7 @@ exports.handleWebhook = async (req, res) => {
 // Get webhook logs (for debugging)
 exports.getWebhookLogs = async (req, res) => {
   try {
-    const { limit = 50, event_type } = req.query;
+    const { limit = 50, event_type, phone } = req.query;
 
     const where = {};
     if (event_type) {
@@ -427,22 +427,55 @@ exports.getWebhookLogs = async (req, res) => {
 
     // Use a very high limit or no limit if limit is very high
     const queryLimit = parseInt(limit) >= 1000 ? null : parseInt(limit);
-    const logs = await WebhookLog.findAll({
+    let logs = await WebhookLog.findAll({
       where,
       limit: queryLimit, // null means no limit
       order: [['created_at', 'DESC']],
       attributes: ['id', 'event_type', 'payload', 'created_at']
     });
 
+    // Filter by phone if provided (search in payload)
+    if (phone) {
+      const normalizedPhone = phone.replace(/\D/g, '');
+      logs = logs.filter(log => {
+        try {
+          const payload = typeof log.payload === 'string' ? JSON.parse(log.payload) : log.payload;
+          // Check various phone fields in payload
+          const fromNumber = payload.from || payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from || 
+                            payload.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.wa_id;
+          if (fromNumber) {
+            const normalizedFrom = String(fromNumber).replace(/\D/g, '');
+            return normalizedFrom === normalizedPhone || normalizedFrom.endsWith(normalizedPhone) || normalizedPhone.endsWith(normalizedFrom);
+          }
+          return false;
+        } catch (e) {
+          return false;
+        }
+      });
+    }
+
     res.json({
       success: true,
       count: logs.length,
-      logs: logs.map(log => ({
-        id: log.id,
-        event_type: log.event_type,
-        payload: JSON.parse(log.payload),
-        received_at: log.created_at
-      }))
+      logs: logs.map(log => {
+        try {
+          return {
+            id: log.id,
+            event_type: log.event_type,
+            payload: typeof log.payload === 'string' ? JSON.parse(log.payload) : log.payload,
+            received_at: log.created_at,
+            created_at: log.created_at
+          };
+        } catch (e) {
+          return {
+            id: log.id,
+            event_type: log.event_type,
+            payload: {},
+            received_at: log.created_at,
+            created_at: log.created_at
+          };
+        }
+      })
     });
   } catch (err) {
     console.error('Get Webhook Logs Error:', err);

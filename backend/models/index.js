@@ -72,6 +72,14 @@ const syncDatabase = async () => {
     } catch (campaignError) {
       console.error('⚠️  Campaign table sync error:', campaignError.message);
     }
+    
+    // Ensure Template table has updated ENUM values (including marketing category)
+    try {
+      await Template.sync({ force: false, alter: true });
+      console.log('✅ Template table synced with updated categories.');
+    } catch (templateError) {
+      console.error('⚠️  Template table sync error:', templateError.message);
+    }
   } catch (error) {
     console.error('❌ Database synchronization failed:', error.message);
     console.error('Full error:', error);

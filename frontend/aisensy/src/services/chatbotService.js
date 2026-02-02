@@ -6,7 +6,7 @@ const getToken = () => {
 };
 
 // Send message to chatbot
-export const sendChatbotMessage = async (message, interactionCount = 0) => {
+export const sendChatbotMessage = async (message, interactionCount = 0, flowState = null) => {
   try {
     const token = getToken();
     if (!token) {
@@ -19,7 +19,7 @@ export const sendChatbotMessage = async (message, interactionCount = 0) => {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ message, interactionCount })
+      body: JSON.stringify({ message, interactionCount, flowState })
     });
 
     const data = await response.json();
@@ -30,8 +30,11 @@ export const sendChatbotMessage = async (message, interactionCount = 0) => {
 
     if (data.success) {
       return {
-        message: data.response || data.message || "I'm here to help!",
-        suggestions: data.suggestions || []
+        message: data.message || data.response || "I'm here to help!",
+        suggestions: data.suggestions || [],
+        buttons: data.buttons || [],
+        flowState: data.flowState || flowState,
+        isValid: data.isValid
       };
     }
 

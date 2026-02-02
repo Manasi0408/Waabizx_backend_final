@@ -180,7 +180,7 @@ exports.getContactMessages = async (req, res) => {
       });
     }
 
-    // Get all messages for this contact
+    // Get all messages for this contact from Message table
     const messages = await Message.findAll({
       where: {
         contactId: contact.id
@@ -199,6 +199,61 @@ exports.getContactMessages = async (req, res) => {
       ]
     });
 
+    // Also get messages from InboxMessage table (includes template messages)
+    const inboxMessages = await InboxMessage.findAll({
+      where: {
+        contactId: contact.id,
+        userId: userId
+      },
+      order: [['timestamp', 'ASC']],
+      attributes: [
+        'id',
+        'message',
+        'status',
+        'direction',
+        'type',
+        'timestamp',
+        'waMessageId',
+        'createdAt',
+        'updatedAt'
+      ]
+    });
+
+    // Convert InboxMessage to same format as Message
+    const convertedInboxMessages = inboxMessages.map(im => ({
+      id: im.id,
+      content: im.message, // InboxMessage uses 'message' field
+      status: im.status,
+      type: im.direction === 'incoming' ? 'incoming' : 'outgoing',
+      sentAt: im.timestamp || im.createdAt,
+      deliveredAt: null,
+      readAt: null,
+      createdAt: im.createdAt,
+      updatedAt: im.updatedAt,
+      waMessageId: im.waMessageId,
+      source: 'inbox_message',
+      isTemplate: im.message?.startsWith('Template:') || false
+    }));
+
+    // Merge and deduplicate messages
+    const allMessages = [...messages, ...convertedInboxMessages];
+    
+    // Remove duplicates by ID and sort by sentAt
+    const uniqueMessages = allMessages.reduce((acc, msg) => {
+      const existing = acc.find(m => m.id === msg.id);
+      if (!existing) {
+        acc.push(msg);
+      }
+      return acc;
+    }, []);
+
+    // Sort by sentAt/timestamp
+    uniqueMessages.sort((a, b) => {
+      const dateA = new Date(a.sentAt || a.createdAt || 0);
+      const dateB = new Date(b.sentAt || b.createdAt || 0);
+      return dateA - dateB;
+    });
+
     res.json({
       success: true,
       contact: {
@@ -208,7 +263,7 @@ exports.getContactMessages = async (req, res) => {
         email: contact.email,
         status: contact.status
       },
-      messages: messages
+      messages: uniqueMessages
     });
   } catch (error) {
     console.error('Error fetching contact messages:', error);
