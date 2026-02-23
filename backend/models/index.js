@@ -80,6 +80,14 @@ const syncDatabase = async () => {
     } catch (templateError) {
       console.error('⚠️  Template table sync error:', templateError.message);
     }
+    // Ensure Contact table has whatsappOptInAt for keyword opt-in
+    try {
+      const Contact = require('./Contact');
+      await Contact.sync({ force: false, alter: true });
+      console.log('✅ Contact table synced (whatsappOptInAt).');
+    } catch (contactError) {
+      console.error('⚠️  Contact table sync error:', contactError.message);
+    }
   } catch (error) {
     console.error('❌ Database synchronization failed:', error.message);
     console.error('Full error:', error);

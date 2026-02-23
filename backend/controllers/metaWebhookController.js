@@ -91,7 +91,7 @@ exports.handleWebhook = async (req, res) => {
             phone: fromNumber
           },
           order: [['updatedAt', 'DESC']], // Get most recently updated contact
-          attributes: ['id', 'phone', 'name', 'email', 'status', 'tags', 'country', 'lastContacted', 'notes', 'userId', 'createdAt', 'updatedAt']
+          attributes: ['id', 'phone', 'name', 'email', 'status', 'tags', 'country', 'lastContacted', 'notes', 'userId', 'whatsappOptInAt', 'createdAt', 'updatedAt']
         });
 
         let userId;
@@ -132,6 +132,17 @@ exports.handleWebhook = async (req, res) => {
           console.log('   Contact ID:', contact.id);
           console.log('   User ID:', userId);
         }
+
+          // WhatsApp Keyword Opt-in: START or YES = user consent (Meta-friendly)
+          const normalizedText = (text || '').trim().toUpperCase();
+          if (normalizedText === 'START' || normalizedText === 'YES') {
+            const optInUpdate = { status: 'active' };
+            if (!contact.whatsappOptInAt) {
+              optInUpdate.whatsappOptInAt = new Date();
+              console.log('✅ Keyword opt-in: user sent "' + normalizedText + '" – consent recorded (whatsappOptInAt set)');
+            }
+            await contact.update(optInUpdate);
+          }
 
           // Save message to Message table (for inbox compatibility)
           console.log('\n💾 Saving message to Message table...');
@@ -230,7 +241,7 @@ exports.handleWebhook = async (req, res) => {
             phone: phone
           },
           order: [['updatedAt', 'DESC']], // Get most recently updated contact
-          attributes: ['id', 'phone', 'name', 'email', 'status', 'tags', 'country', 'lastContacted', 'notes', 'userId', 'createdAt', 'updatedAt']
+          attributes: ['id', 'phone', 'name', 'email', 'status', 'tags', 'country', 'lastContacted', 'notes', 'userId', 'whatsappOptInAt', 'createdAt', 'updatedAt']
         });
 
         let userId;
@@ -271,6 +282,17 @@ exports.handleWebhook = async (req, res) => {
           console.log('   Contact ID:', contact.id);
           console.log('   User ID:', userId);
         }
+
+          // WhatsApp Keyword Opt-in: START or YES = user consent (Meta-friendly)
+          const normalizedTextAi = (text || '').trim().toUpperCase();
+          if (normalizedTextAi === 'START' || normalizedTextAi === 'YES') {
+            const optInUpdateAi = { status: 'active' };
+            if (!contact.whatsappOptInAt) {
+              optInUpdateAi.whatsappOptInAt = new Date();
+              console.log('✅ Keyword opt-in (AiSensy): user sent "' + normalizedTextAi + '" – consent recorded (whatsappOptInAt set)');
+            }
+            await contact.update(optInUpdateAi);
+          }
 
           // 🔹 4. Save message to Message table (for inbox compatibility)
           console.log('\n💾 Saving message to Message table...');

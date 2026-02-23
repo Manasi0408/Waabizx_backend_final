@@ -41,6 +41,11 @@ const Contact = sequelize.define('Contact', {
     type: DataTypes.DATE,
     defaultValue: null
   },
+  whatsappOptInAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    defaultValue: null
+  },
   notes: {
     type: DataTypes.TEXT,
     defaultValue: ''

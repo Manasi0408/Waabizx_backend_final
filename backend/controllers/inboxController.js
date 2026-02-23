@@ -21,6 +21,7 @@ exports.getInboxList = async (req, res) => {
         c.email,
         c.status as contactStatus,
         c.lastContacted,
+        c.whatsappOptInAt,
         COALESCE(
           (SELECT m.content 
            FROM \`${messageTableName}\` m 
@@ -82,6 +83,7 @@ exports.getInboxList = async (req, res) => {
         NULL as email,
         'active' as contactStatus,
         MAX(mm.created_at) as lastContacted,
+        NULL as whatsappOptInAt,
         (SELECT mm2.message_text 
          FROM \`${metaMessageTableName}\` mm2 
          WHERE mm2.phone = mm.phone 
@@ -113,6 +115,7 @@ exports.getInboxList = async (req, res) => {
       email: item.email,
       status: item.contactStatus,
       lastContacted: item.lastContacted,
+      whatsappOptInAt: item.whatsappOptInAt || null,
       lastMessage: item.lastMessage || '',
       lastMessageTime: item.lastMessageTime,
       unreadCount: parseInt(item.unreadCount) || 0
@@ -261,7 +264,8 @@ exports.getContactMessages = async (req, res) => {
         phone: contact.phone,
         name: contact.name,
         email: contact.email,
-        status: contact.status
+        status: contact.status,
+        whatsappOptInAt: contact.whatsappOptInAt || null
       },
       messages: uniqueMessages
     });

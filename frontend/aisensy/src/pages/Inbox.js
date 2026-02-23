@@ -1895,10 +1895,15 @@ function Inbox() {
                               </p>
                             )}
                           </div>
-                          <div className="flex items-center justify-between">
-                            <p className="text-sm text-gray-600 truncate flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm text-gray-600 truncate flex-1 min-w-0">
                               {contact.lastMessage || 'No messages'}
                             </p>
+                            {contact.whatsappOptInAt && (
+                              <span className="flex-shrink-0 px-1.5 py-0.5 text-[10px] font-medium text-green-700 bg-green-100 rounded" title={`Opted in ${formatTime(contact.whatsappOptInAt)}`}>
+                                Opted in
+                              </span>
+                            )}
                             {contact.unreadCount > 0 && (
                               <span className="ml-2 px-2 py-0.5 bg-blue-600 text-white text-xs font-semibold rounded-full flex-shrink-0">
                                 {contact.unreadCount > 9 ? '9+' : contact.unreadCount}
@@ -1946,6 +1951,12 @@ function Inbox() {
                         ) : null}
                       </div>
                       <p className="text-xs text-gray-500">{selectedContact.phone}</p>
+                      {selectedContact.whatsappOptInAt && (
+                        <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 text-xs font-medium text-green-700 bg-green-100 rounded-full" title={`Consent via START/YES on ${formatTime(selectedContact.whatsappOptInAt)}`}>
+                          <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                          Opted in
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
