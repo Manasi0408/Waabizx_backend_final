@@ -1,4 +1,6 @@
+const path = require('path');
 const express = require('express');
+const axios = require('axios');
 const cors = require('cors');
 const morgan = require('morgan');
 const helmet = require('helmet');
@@ -60,6 +62,35 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Meta token exchange (legacy): exchange authorization code for access token
+app.post('/exchange-token', async (req, res) => {
+  const { code } = req.body;
+
+  try {
+    const response = await axios.get(
+      'https://graph.facebook.com/v19.0/oauth/access_token',
+      {
+        params: {
+          client_id: process.env.META_APP_ID || 'YOUR_APP_ID',
+          client_secret: process.env.META_APP_SECRET || 'YOUR_APP_SECRET',
+          redirect_uri: process.env.META_REDIRECT_URI || 'https://your-ngrok-url/meta/callback',
+          code: code
+        }
+      }
+    );
+
+    console.log("Access Token:", response.data);
+    res.json(response.data);
+  } catch (error) {
+    console.log(error.response?.data);
+    res.status(500).send("Token exchange failed");
+  }
+});
+
+// Meta production routes: GET /meta/callback, POST /meta/onboard (SaaS onboarding)
+const metaRoutes = require('./routes/meta.routes');
+app.use('/meta', metaRoutes);
+
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/campaigns', campaignRoutes);
@@ -80,7 +111,13 @@ app.use('/api/contact-management', contactManagementRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/chatbot', chatbotRoutes);
 
-// 404 handler
+// Serve React build (static files + SPA fallback)
+app.use(express.static(path.join(__dirname, 'build')));
+app.get('/{*splat}', (req, res) => {
+  res.sendFile(path.join(__dirname, 'build', 'index.html'));
+});
+
+// 404 handler (only reached if build/index.html is missing or request is non-GET)
 app.use((req, res) => {
   res.status(404).json({
     success: false,

@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { WebhookLog, MetaMessage, Contact, Message, InboxMessage, User } = require('../models');
+const { WebhookLog, MetaMessage, Contact, Message, InboxMessage, User, WhatsAppAccount } = require('../models');
 const { Op } = require('sequelize');
 const socketService = require('../services/socketService');
 
@@ -14,8 +14,7 @@ exports.verifyWebhook = (req, res) => {
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  // Check both VERIFY_TOKEN and Verify_Token (for compatibility)
-  const verifyToken = process.env.Verify_Token;
+  const verifyToken = process.env.VERIFY_TOKEN || process.env.Verify_Token;
   
   console.log('Received mode:', mode);
   console.log('Received token:', token);
@@ -53,6 +52,17 @@ exports.handleWebhook = async (req, res) => {
       payload: JSON.stringify(payload)
     });
     console.log('✅ Webhook log saved to DB (ID:', webhookLog.id + ')');
+
+    // Multi-client: identify client by WABA ID (entry[0].id = WABA ID)
+    if (payload.object === 'whatsapp_business_account' && payload.entry?.[0]) {
+      const wabaId = payload.entry[0].id;
+      let clientId = null;
+      try {
+        const account = await WhatsAppAccount.findOne({ where: { waba_id: wabaId }, attributes: ['client_id'] });
+        if (account) clientId = account.client_id;
+      } catch (e) {}
+      console.log('Message received for WABA:', wabaId, clientId != null ? `(client_id: ${clientId})` : '(no client mapped)');
+    }
 
     // 🔹 2. Handle Meta/WhatsApp webhook format (entry.changes.value format)
     const entry = payload.entry?.[0]?.changes?.[0]?.value;

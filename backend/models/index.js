@@ -8,6 +8,9 @@ const Template = require('./Template');
 const Message = require('./Message');
 const Notification = require('./Notification');
 const InboxMessage = require('./InboxMessage');
+const ClientWhatsApp = require('./ClientWhatsApp');
+const Client = require('./Client');
+const WhatsAppAccount = require('./WhatsAppAccount');
 
 // Import meta models for webhooks
 const WebhookLog = require('./metaWebhook')(sequelize, DataTypes);
@@ -40,6 +43,12 @@ InboxMessage.belongsTo(User, { foreignKey: 'userId' });
 
 User.hasMany(Notification, { foreignKey: 'userId', onDelete: 'CASCADE' });
 Notification.belongsTo(User, { foreignKey: 'userId' });
+
+User.hasMany(ClientWhatsApp, { foreignKey: 'client_id', onDelete: 'CASCADE' });
+ClientWhatsApp.belongsTo(User, { foreignKey: 'client_id' });
+
+Client.hasMany(WhatsAppAccount, { foreignKey: 'client_id', onDelete: 'CASCADE' });
+WhatsAppAccount.belongsTo(Client, { foreignKey: 'client_id' });
 
 const syncDatabase = async () => {
   try {
@@ -88,6 +97,26 @@ const syncDatabase = async () => {
     } catch (contactError) {
       console.error('⚠️  Contact table sync error:', contactError.message);
     }
+    // Ensure ClientWhatsApp (clients_whatsapp) table exists for Meta onboarding
+    try {
+      await ClientWhatsApp.sync({ force: false, alter: true });
+      console.log('✅ ClientWhatsApp table verified/created.');
+    } catch (clientWaError) {
+      console.error('⚠️  ClientWhatsApp table sync error:', clientWaError.message);
+    }
+    // Production SaaS: clients and whatsapp_accounts (multi-tenant)
+    try {
+      await Client.sync({ force: false, alter: true });
+      console.log('✅ Client table verified/created.');
+    } catch (clientError) {
+      console.error('⚠️  Client table sync error:', clientError.message);
+    }
+    try {
+      await WhatsAppAccount.sync({ force: false, alter: true });
+      console.log('✅ WhatsAppAccount table verified/created.');
+    } catch (waAccError) {
+      console.error('⚠️  WhatsAppAccount table sync error:', waAccError.message);
+    }
   } catch (error) {
     console.error('❌ Database synchronization failed:', error.message);
     console.error('Full error:', error);
@@ -106,6 +135,9 @@ module.exports = {
   Message,
   Notification,
   InboxMessage,
+  ClientWhatsApp,
+  Client,
+  WhatsAppAccount,
   WebhookLog,
   MetaMessage,
   syncDatabase
