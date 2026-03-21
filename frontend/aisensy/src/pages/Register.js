@@ -41,7 +41,7 @@ function Register() {
     try {
       const response = await register(formData.name, formData.email, formData.password);
       if (response.success) {
-        navigate('/dashboard');
+        navigate('/login', { state: { email: formData.email, registered: true } });
       }
     } catch (err) {
       setError(err.message || 'Registration failed. Please try again.');

@@ -4,16 +4,22 @@ const {
   createCampaign,
   getCampaigns,
   getCampaignById,
+  updateCampaign,
+  deleteCampaign,
   startCampaign,
   pauseCampaign,
   resumeCampaign,
-  getCampaignAudience
+  getCampaignAudience,
+  addContactsToCampaign
 } = require('../controllers/campaignController');
 const { protect } = require('../middleware/authMiddleware');
 
 router.post('/', protect, createCampaign);
 router.get('/', protect, getCampaigns);
 router.get('/:id', protect, getCampaignById);
+router.put('/:id', protect, updateCampaign);
+router.delete('/:id', protect, deleteCampaign);
+router.post('/:id/contacts', protect, addContactsToCampaign);
 router.post('/:id/start', protect, startCampaign);
 router.post('/:id/pause', protect, pauseCampaign);
 router.post('/:id/resume', protect, resumeCampaign);

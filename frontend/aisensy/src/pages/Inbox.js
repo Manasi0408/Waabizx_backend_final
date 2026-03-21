@@ -11,11 +11,13 @@ import { uploadMedia, sendMediaMessage } from '../services/mediaService';
 import { updateContact, getContactHistory, updateTypingStatus, updateOnlineStatus } from '../services/contactManagementService';
 import { sendChatbotMessage } from '../services/chatbotService';
 import { getTemplates } from '../services/templateService';
+import { getManagerRequesting, assignChatToAgent, interveneByPhone } from '../api/chatApi';
+import axios from '../api/axios';
+import MainSidebarNav from '../components/MainSidebarNav';
 
 function Inbox() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [notificationDropdownOpen, setNotificationDropdownOpen] = useState(false);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -28,6 +30,15 @@ function Inbox() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [messageText, setMessageText] = useState('');
   const [sending, setSending] = useState(false);
+  const [interveneCannedOptions, setInterveneCannedOptions] = useState([]);
+  const [interveneTemplateOptions, setInterveneTemplateOptions] = useState([]);
+  const [loadingInterveneOptions, setLoadingInterveneOptions] = useState(false);
+  const [interveneOptionsError, setInterveneOptionsError] = useState('');
+  const [selectedInterveneCannedId, setSelectedInterveneCannedId] = useState('');
+  const [selectedInterveneTemplateId, setSelectedInterveneTemplateId] = useState('');
+  const interveneOptionsLoadedRef = useRef(false);
+  const [interveneQuickPickerOpen, setInterveneQuickPickerOpen] = useState(false);
+  const interveneQuickPickerRef = useRef(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [messageSearchQuery, setMessageSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -48,7 +59,13 @@ function Inbox() {
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [templates, setTemplates] = useState([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
-  const dropdownRef = useRef(null);
+  const [requestingList, setRequestingList] = useState([]);
+  const [loadingRequesting, setLoadingRequesting] = useState(false);
+  const [agentsList, setAgentsList] = useState([]);
+  const [loadingAgents, setLoadingAgents] = useState(false);
+  const [assigningId, setAssigningId] = useState(null);
+  const [interventionAlert, setInterventionAlert] = useState(null);
+  const [intervenedPhones, setIntervenedPhones] = useState({});
   const notificationRef = useRef(null);
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
@@ -75,6 +92,58 @@ function Inbox() {
     };
     fetchProfile();
   }, [navigate]);
+
+  const isAdminOrManager = user && ['admin', 'manager'].includes(String(user.role || '').toLowerCase());
+
+  const fetchRequesting = useCallback(async () => {
+    if (!isAdminOrManager) return;
+    setLoadingRequesting(true);
+    try {
+      const data = await getManagerRequesting();
+      setRequestingList(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setRequestingList([]);
+    } finally {
+      setLoadingRequesting(false);
+    }
+  }, [isAdminOrManager]);
+
+  const fetchAgentsForAssign = useCallback(async () => {
+    if (!isAdminOrManager) return;
+    setLoadingAgents(true);
+    try {
+      const res = await axios.get('/auth/agents');
+      setAgentsList(res.data?.agents || []);
+    } catch (e) {
+      setAgentsList([]);
+    } finally {
+      setLoadingAgents(false);
+    }
+  }, [isAdminOrManager]);
+
+  useEffect(() => {
+    if (isAdminOrManager) {
+      fetchRequesting();
+      fetchAgentsForAssign();
+    }
+  }, [isAdminOrManager, fetchRequesting, fetchAgentsForAssign]);
+
+  const handleAssignToAgent = async (conversationId, agentId) => {
+    if (!conversationId || !agentId) return;
+    setAssigningId(conversationId);
+    try {
+      const result = await assignChatToAgent(conversationId, agentId);
+      if (result?.success !== false && !result?.error) {
+        await fetchRequesting();
+      } else {
+        alert(result?.message || result?.error || 'Assign failed');
+      }
+    } catch (e) {
+      alert(e?.message || 'Failed to assign');
+    } finally {
+      setAssigningId(null);
+    }
+  };
 
   // Fetch notifications
   const fetchNotifications = async (forceRefresh = false) => {
@@ -400,6 +469,11 @@ function Inbox() {
       onSocketEvent('typing', handleTyping);
       onSocketEvent('online-status', handleOnlineStatus);
       onSocketEvent('inbox-update', handleInboxUpdate);
+      const handleIntervention = (data) => {
+        setInterventionAlert(data);
+        setTimeout(() => setInterventionAlert(null), 6000);
+      };
+      onSocketEvent('intervention', handleIntervention);
 
       return () => {
         offSocketEvent('new-message', handleNewMessage);
@@ -407,6 +481,7 @@ function Inbox() {
         offSocketEvent('typing', handleTyping);
         offSocketEvent('online-status', handleOnlineStatus);
         offSocketEvent('inbox-update', handleInboxUpdate);
+        offSocketEvent('intervention', handleIntervention);
         disconnectSocket();
       };
     }
@@ -912,9 +987,6 @@ function Inbox() {
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setProfileDropdownOpen(false);
-      }
       if (notificationRef.current && !notificationRef.current.contains(event.target)) {
         setNotificationDropdownOpen(false);
       }
@@ -922,11 +994,6 @@ function Inbox() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
 
   const handleNotificationClick = async (notification) => {
     if (!notification.is_read) {
@@ -976,15 +1043,17 @@ function Inbox() {
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
 
-  const handleSendMessage = async (e) => {
-    e.preventDefault();
-    if (!messageText.trim() || !selectedContact || sending) return;
+  const handleSendMessage = async (e, overrideText) => {
+    if (e?.preventDefault) e.preventDefault();
+    const phone = selectedContact?.phone;
+    const textToSend = overrideText !== undefined ? String(overrideText || "") : String(messageText || "");
+    if (!textToSend.trim() || !selectedContact || sending) return;
 
-    const phone = selectedContact.phone;
     const currentFlowState = botFlowState[phone];
+    const isIntervened = intervenedPhones[phone];
 
-    // Prevent manual sending when bot flow is active
-    if (currentFlowState && currentFlowState !== 'completed') {
+    // Prevent manual sending when bot flow is active (unless admin has intervened)
+    if (!isIntervened && currentFlowState && currentFlowState !== 'completed') {
       console.log('🚫 Manual sending disabled - bot is handling conversation');
       alert('Bot is currently handling this conversation. Please wait for the bot to complete.');
       return;
@@ -993,7 +1062,7 @@ function Inbox() {
     // Stop typing indicator
     handleTypingStop();
 
-    const text = messageText.trim();
+    const text = textToSend.trim();
 
     setMessageText('');
     setSending(true);
@@ -1107,6 +1176,111 @@ function Inbox() {
       setLoadingTemplates(false);
     }
   };
+
+  const appendToMessageText = (insertValue) => {
+    const v = String(insertValue || "");
+    if (!v.trim()) return;
+    setMessageText((prev) => {
+      const base = String(prev || "");
+      return base.trim() ? `${base} ${v}` : v;
+    });
+  };
+
+  const sendInterveneQuickItem = async (insertValue) => {
+    setInterveneQuickPickerOpen(false);
+    setSelectedInterveneCannedId("");
+    setSelectedInterveneTemplateId("");
+    try {
+      await handleSendMessage(null, insertValue);
+    } catch (e) {
+      // handleSendMessage already alerts/optimistic-updates; keep UI stable
+      setInterveneQuickPickerOpen(false);
+    }
+  };
+
+  const fetchInterveneInsertOptions = async () => {
+    try {
+      setLoadingInterveneOptions(true);
+      setInterveneOptionsError("");
+
+      const phone = selectedContact?.phone;
+      if (!phone) return;
+
+      const [cannedRes, localApprovedRes, metaRes] = await Promise.all([
+        axios.get("/canned-messages"),
+        getTemplates({ status: "approved", limit: 200 }),
+        axios.get("/templates/meta"),
+      ]);
+
+      const cannedMessages = Array.isArray(cannedRes?.data?.messages) ? cannedRes.data.messages : [];
+      setInterveneCannedOptions(
+        cannedMessages.map((m) => ({
+          id: String(m.id),
+          label: `${m.name} (${m.type})`,
+          insertValue:
+            m.type === "TEXT"
+              ? String(m.text || "")
+              : m.type === "IMAGE"
+                ? `[image:${String(m.text || "").trim() || "image"}]`
+                : `[file:${String(m.text || "").trim() || "file"}]`,
+        }))
+      );
+
+      const localApprovedTemplates = Array.isArray(localApprovedRes?.templates)
+        ? localApprovedRes.templates
+        : [];
+
+      const localOptions = localApprovedTemplates
+        .filter((t) => String(t?.status || "").toLowerCase() === "approved")
+        .map((t) => ({
+          id: `local_${t.id}`,
+          label: String(t?.name || "Template"),
+          insertValue: String(t?.content || ""),
+        }));
+
+      const metaTemplates = Array.isArray(metaRes?.data?.templates) ? metaRes.data.templates : [];
+      const metaOptions = metaTemplates
+        .filter((t) => String(t?.metaStatus || t?.status || "").toUpperCase() === "APPROVED")
+        .map((t) => {
+          const body = t?.components?.find((c) => String(c?.type || "").toUpperCase() === "BODY");
+          const bodyText = body?.text || t?.name || "";
+          return {
+            id: `meta_${t.id}`,
+            label: String(t?.name || "Meta Template"),
+            insertValue: String(bodyText),
+          };
+        });
+
+      setInterveneTemplateOptions([...localOptions, ...metaOptions]);
+      interveneOptionsLoadedRef.current = true;
+    } catch (e) {
+      setInterveneOptionsError(e?.response?.data?.message || e?.message || "Failed to load intervene options");
+    } finally {
+      setLoadingInterveneOptions(false);
+    }
+  };
+
+  useEffect(() => {
+    const phone = selectedContact?.phone;
+    const isIntervened = phone && intervenedPhones[phone];
+    if (!phone || !isIntervened) return;
+    if (interveneOptionsLoadedRef.current) return;
+    fetchInterveneInsertOptions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedContact, intervenedPhones]);
+
+  useEffect(() => {
+    if (!interveneQuickPickerOpen) return;
+    const onDocMouseDown = (e) => {
+      const el = interveneQuickPickerRef.current;
+      if (!el) return;
+      if (!el.contains(e.target)) {
+        setInterveneQuickPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => document.removeEventListener('mousedown', onDocMouseDown);
+  }, [interveneQuickPickerOpen]);
 
   // Handle Start Bot flow - show template modal
   const handleStartBot = async () => {
@@ -1559,9 +1733,31 @@ function Inbox() {
   const userInitial = userName.charAt(0).toUpperCase();
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+      {/* Intervention popup for admin when agent clicks Intervene */}
+      {interventionAlert && isAdminOrManager && (
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-[9999] px-6 py-4 bg-teal-700 text-white rounded-lg shadow-lg flex items-center gap-3 min-w-[320px] max-w-md">
+          <span className="font-semibold shrink-0">Intervention</span>
+          <span>
+            <strong>{interventionAlert.agentName}</strong> intervened
+            {interventionAlert.dateTime && (
+              <> at {new Date(interventionAlert.dateTime).toLocaleString()}</>
+            )}
+            {interventionAlert.phone && <> (phone: {interventionAlert.phone})</>}.
+          </span>
+          <button
+            type="button"
+            onClick={() => setInterventionAlert(null)}
+            className="ml-auto p-1 rounded hover:bg-teal-600"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* Top Navigation Bar */}
-      <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-4 flex justify-between items-center shadow-sm">
+      <header className="shrink-0 bg-white border-b border-gray-200 px-4 md:px-6 py-4 flex justify-between items-center shadow-sm">
         <div className="flex items-center gap-4">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -1714,129 +1910,78 @@ function Inbox() {
             )}
           </div>
 
-          {/* Profile Dropdown */}
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
-              className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-semibold hover:from-blue-600 hover:to-blue-700 transition shadow-md"
-            >
-              {userInitial}
-            </button>
-            {profileDropdownOpen && (
-              <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-xl border border-gray-200 z-50">
-                <div className="p-3 border-b border-gray-200">
-                  <p className="text-sm font-semibold text-gray-800">{userName}</p>
-                  <p className="text-xs text-gray-500 truncate">{user?.email}</p>
-                </div>
-                <Link
-                  to="/settings"
-                  className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition"
-                >
-                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  <span>Settings</span>
-                </Link>
-                <button
-                  onClick={handleLogout}
-                  className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-3 transition"
-                >
-                  <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                  </svg>
-                  <span>Logout</span>
-                </button>
-              </div>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/settings')}
+            className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-semibold hover:from-blue-600 hover:to-blue-700 transition shadow-md"
+          >
+            {userInitial}
+          </button>
         </div>
       </header>
 
-      <div className="flex h-[calc(100vh-73px)]">
+      <div className="flex flex-1 min-h-0">
         {/* Left Sidebar - Navigation */}
-        <aside className={`${sidebarOpen ? 'w-64' : 'w-0'} bg-white border-r border-gray-200 transition-all duration-300 overflow-hidden`}>
-          <nav className="p-4 space-y-1 h-full overflow-y-auto">
-            <Link
-              to="/dashboard"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Dashboard</span>
-            </Link>
-            <Link
-              to="/campaigns"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Campaigns</span>
-            </Link>
-            <Link
-              to="/broadcast"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Broadcast</span>
-            </Link>
-            <Link
-              to="/templates"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Templates</span>
-            </Link>
-            <Link
-              to="/contacts"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Contacts</span>
-            </Link>
-            <Link
-              to="/inbox"
-              className="flex items-center gap-3 px-4 py-3 bg-blue-50 text-blue-600 font-medium rounded-lg"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Inbox</span>
-            </Link>
-            <Link
-              to="/analytics"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Analytics</span>
-            </Link>
-            <Link
-              to="/settings"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Settings</span>
-            </Link>
-          </nav>
+        <aside className={`${sidebarOpen ? 'w-20' : 'w-0 md:w-20'} h-full shrink-0 flex flex-col bg-teal-900 text-white border-r border-teal-800 transition-all duration-300 overflow-hidden`}>
+          <MainSidebarNav />
         </aside>
 
         {/* Main Inbox Area */}
         <div className="flex-1 flex overflow-hidden">
           {/* Left Panel - Chat List */}
           <div className="w-80 border-r border-gray-200 bg-white flex flex-col">
+            {/* Requesting (admin/manager): unassigned conversations — assign to agent */}
+            {/* {isAdminOrManager && (
+              <div className="border-b border-gray-200 bg-amber-50/80">
+                <div className="px-3 py-2">
+                  <span className="text-sm font-semibold text-gray-800">Requesting</span>
+                </div>
+                <div className="max-h-48 overflow-y-auto px-3 pb-3">
+                  {loadingRequesting ? (
+                    <p className="text-xs text-gray-500 py-2">Loading...</p>
+                  ) : requestingList.length === 0 ? (
+                    <p className="text-xs text-gray-500 py-2">No requesting conversations</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {requestingList.map((conv) => (
+                        <li
+                          key={conv.id}
+                          className="bg-white border border-gray-200 rounded-lg p-2 text-left shadow-sm"
+                        >
+                          <div className="text-xs font-medium text-gray-800 truncate">
+                            {conv.phone || conv.customer_name || `#${conv.id}`}
+                          </div>
+                          <div className="text-xs text-gray-600 truncate mt-0.5">
+                            {conv.last_message || '—'}
+                          </div>
+                          <div className="mt-2 flex items-center gap-2">
+                            <select
+                              className="flex-1 min-w-0 text-xs border border-gray-300 rounded py-1 px-2 bg-white"
+                              value=""
+                              onChange={(e) => {
+                                const agentId = e.target.value;
+                                if (agentId) handleAssignToAgent(conv.id, Number(agentId));
+                              }}
+                              disabled={!!assigningId}
+                            >
+                              <option value="">Assign to agent...</option>
+                              {agentsList.map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  {a.name || a.email}
+                                </option>
+                              ))}
+                            </select>
+                            {assigningId === conv.id && (
+                              <span className="text-xs text-gray-400">Assigning...</span>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            )} */}
             {/* Search Bar */}
             <div className="p-4 border-b border-gray-200">
               <div className="relative">
@@ -2280,109 +2425,184 @@ function Inbox() {
                   <div ref={messagesEndRef} />
                 </div>
 
-                {/* Message Input */}
-                <div className="bg-white border-t border-gray-200 px-6 py-4">
-                  <form onSubmit={handleSendMessage} className="flex items-center gap-3">
-                    {/* Start Bot button */}
-                    {selectedContact && !botFlowState[selectedContact.phone] && (
-                      <button
-                        type="button"
-                        onClick={handleStartBot}
-                        disabled={sending}
-                        className="px-3 py-2 bg-green-600 text-white text-xs font-semibold rounded-lg hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                        title="Start Bot"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
-                        Start Bot
-                      </button>
-                    )}
-                    {/* Media picker button */}
+                {/* In-chat Intervene bar when there is a customer message and not yet intervened */}
+                {selectedContact?.phone && !intervenedPhones[selectedContact.phone] && messages.some((m) => m.type === 'incoming') && (
+                  <div className="bg-amber-50 border-t border-amber-200 px-6 py-3 flex items-center justify-center gap-3 flex-wrap">
+                    <span className="text-sm text-amber-800">New customer message — take over the conversation</span>
                     <button
                       type="button"
-                      onClick={() => {
-                        setShowMediaPicker(!showMediaPicker);
-                        fileInputRef.current?.click();
-                      }}
-                      className="p-2 text-gray-600 hover:text-blue-600 hover:bg-gray-100 rounded-lg transition"
-                      title="Attach media"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                      </svg>
-                    </button>
-                    <input
-                      type="file"
-                      ref={fileInputRef}
-                      className="hidden"
-                      accept="image/*,video/*,audio/*,.pdf,.doc,.docx"
-                      onChange={(e) => {
-                        const file = e.target.files[0];
-                        if (file) {
-                          handleMediaUpload(file);
+                      onClick={async () => {
+                        const phone = selectedContact.phone;
+                        if (!phone) return;
+                        try {
+                          const result = await interveneByPhone(phone);
+                          if (result?.success) {
+                            setIntervenedPhones((prev) => ({ ...prev, [phone]: true }));
+                            fetchInboxList(false);
+                          } else {
+                            alert(result?.message || 'Failed to intervene');
+                          }
+                        } catch (e) {
+                          alert(e?.message || 'Failed to intervene');
                         }
-                        e.target.value = ''; // Reset input
                       }}
-                    />
-                    
-                    {(() => {
-                      const phone = selectedContact?.phone;
-                      const currentFlowState = botFlowState[phone];
-                      const isBotActive = currentFlowState && currentFlowState !== 'completed';
-                      
-                      return (
-                        <>
-                          {isBotActive && (
-                            <div className="w-full mb-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
-                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-                              <span className="text-sm text-blue-700 font-medium">
-                                Bot is handling this conversation. Manual sending is disabled.
-                              </span>
+                      className="px-4 py-2 rounded-lg bg-teal-600 text-white font-medium text-sm hover:bg-teal-700"
+                    >
+                      Intervene
+                    </button>
+                  </div>
+                )}
+
+                {/* Message Input: when intervened show Send; otherwise Intervene (admin) when chat has customer message or is selected */}
+                <div className="bg-white border-t border-gray-200 px-6 py-4 flex justify-center items-center flex-wrap gap-2">
+                  {selectedContact?.phone && (
+                    intervenedPhones[selectedContact.phone] ? (
+                      <form onSubmit={handleSendMessage} className="flex flex-col gap-2 flex-1 min-w-[200px] max-w-xl">
+                        <div className="relative w-full">
+                          <div className="flex items-center justify-end mb-1">
+                            <button
+                              type="button"
+                              onClick={() => setInterveneQuickPickerOpen((v) => !v)}
+                              disabled={loadingInterveneOptions || sending}
+                              className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs font-semibold text-gray-800 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Insert canned message or approved template"
+                            >
+                              <span className="text-base leading-none">📋</span>
+                              Insert
+                            </button>
+                          </div>
+
+                          {interveneQuickPickerOpen && (
+                            <div
+                              ref={interveneQuickPickerRef}
+                              className="absolute right-0 top-full mt-2 w-[360px] max-w-[90vw] bg-white rounded-xl border border-gray-200 shadow-xl z-50 overflow-hidden"
+                            >
+                              <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between gap-2">
+                                <div className="text-sm font-semibold text-gray-900">Quick Insert</div>
+                                <button
+                                  type="button"
+                                  onClick={() => setInterveneQuickPickerOpen(false)}
+                                  className="p-1 rounded hover:bg-gray-200 text-gray-600"
+                                  aria-label="Close"
+                                >
+                                  ×
+                                </button>
+                              </div>
+
+                              <div className="max-h-[360px] overflow-y-auto">
+                                {loadingInterveneOptions ? (
+                                  <div className="px-3 py-4 text-sm text-gray-500">Loading options...</div>
+                                ) : (
+                                  <>
+                                    {interveneOptionsError && (
+                                      <div className="px-3 py-2 text-xs text-red-600 border-b border-gray-100">
+                                        {interveneOptionsError}
+                                      </div>
+                                    )}
+
+                                    <div className="px-3 py-2">
+                                      <div className="text-xs font-semibold text-gray-500 mb-2">Canned Messages</div>
+                                      {interveneCannedOptions.length === 0 ? (
+                                        <div className="text-xs text-gray-500 py-2">No canned messages.</div>
+                                      ) : (
+                                        <div className="space-y-1">
+                                          {interveneCannedOptions.map((opt) => {
+                                            const preview = String(opt.insertValue || "").trim();
+                                            const previewText =
+                                              preview.length > 42 ? `${preview.slice(0, 42)}...` : preview;
+                                            return (
+                                              <button
+                                                key={opt.id}
+                                                type="button"
+                                                onClick={() => sendInterveneQuickItem(opt.insertValue)}
+                                                disabled={sending}
+                                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 transition border border-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                              >
+                                                <div className="text-sm font-semibold text-gray-900 truncate">{opt.label}</div>
+                                                <div className="text-xs text-gray-500 truncate mt-0.5">{previewText}</div>
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    <div className="border-t border-gray-100" />
+
+                                    <div className="px-3 py-2">
+                                      <div className="text-xs font-semibold text-gray-500 mb-2">Approved Templates</div>
+                                      {interveneTemplateOptions.length === 0 ? (
+                                        <div className="text-xs text-gray-500 py-2">No approved templates.</div>
+                                      ) : (
+                                        <div className="space-y-1">
+                                          {interveneTemplateOptions.map((opt) => {
+                                            const preview = String(opt.insertValue || "").trim();
+                                            const previewText =
+                                              preview.length > 42 ? `${preview.slice(0, 42)}...` : preview;
+                                            return (
+                                              <button
+                                                key={opt.id}
+                                                type="button"
+                                                onClick={() => sendInterveneQuickItem(opt.insertValue)}
+                                                disabled={sending}
+                                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 transition border border-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                              >
+                                                <div className="text-sm font-semibold text-gray-900 truncate">{opt.label}</div>
+                                                <div className="text-xs text-gray-500 truncate mt-0.5">{previewText}</div>
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </>
+                                )}
+                              </div>
                             </div>
                           )}
+                        </div>
+
+                        <div className="flex gap-2">
                           <input
                             type="text"
                             value={messageText}
-                            onChange={handleMessageInputChange}
-                            onBlur={handleTypingStop}
-                            placeholder={isBotActive ? "Bot is handling this conversation..." : "Type a message..."}
+                            onChange={(e) => setMessageText(e.target.value)}
+                            placeholder="Type a message..."
                             className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                            disabled={sending || isBotActive}
+                            disabled={sending}
                           />
                           <button
                             type="submit"
-                            disabled={!messageText.trim() || sending || isBotActive}
-                            className="px-6 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                            title={isBotActive ? "Bot is handling this conversation" : ""}
+                            disabled={!messageText.trim() || sending}
+                            className="px-5 py-2 rounded-lg bg-blue-600 text-white font-medium text-sm hover:bg-blue-700 disabled:opacity-50"
                           >
-                            {sending ? (
-                              <>
-                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                                <span>Sending...</span>
-                              </>
-                            ) : (
-                              <>
-                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                                </svg>
-                                <span>Send</span>
-                              </>
-                            )}
+                            {sending ? 'Sending...' : 'Send'}
                           </button>
-                        </>
-                      );
-                    })()}
-                  </form>
-                  
-                  {/* Upload progress */}
-                  {uploadingMedia && (
-                    <div className="mt-2">
-                      <div className="flex items-center gap-2 text-sm text-gray-600">
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-                        <span>Uploading media...</span>
-                      </div>
-                    </div>
+                        </div>
+                      </form>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const phone = selectedContact.phone;
+                          if (!phone) return;
+                          try {
+                            const result = await interveneByPhone(phone);
+                            if (result?.success) {
+                              setIntervenedPhones((prev) => ({ ...prev, [phone]: true }));
+                              fetchInboxList(false);
+                            } else {
+                              alert(result?.message || 'Failed to intervene');
+                            }
+                          } catch (e) {
+                            alert(e?.message || 'Failed to intervene');
+                          }
+                        }}
+                        className="px-5 py-2 rounded-lg bg-teal-600 text-white font-medium text-sm hover:bg-teal-700"
+                      >
+                        Intervene
+                      </button>
+                    )
                   )}
                 </div>
               </>

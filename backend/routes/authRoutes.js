@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const { register, login, getProfile } = require('../controllers/authController');
+const { register, login, getProfile, updateProfile, listAgents, updateAgent } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
+const { authorize } = require('../middleware/roleMiddleware');
 
 // Test endpoint to verify route is working
 router.get('/test', (req, res) => {
@@ -42,5 +43,8 @@ router.post('/debug', (req, res) => {
 router.post('/register', register);
 router.post('/login', login);
 router.get('/profile', protect, getProfile);
+router.put('/profile', protect, updateProfile);
+router.get('/agents', protect, listAgents);
+router.put('/agents/:id', protect, updateAgent);
 
 module.exports = router;

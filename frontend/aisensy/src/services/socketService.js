@@ -15,9 +15,42 @@ export const initializeSocket = (userId, token) => {
   });
 
   socket.on('connect', () => {
+    // Guard in case socket was disconnected/reset before connect event fires
+    if (!socket) {
+      console.warn('Socket connect event fired but socket instance is null');
+      return;
+    }
+
     console.log('Socket connected:', socket.id);
     if (userId) {
+      // Legacy inbox: user-specific room
       socket.emit('join-user', userId);
+
+      // AiSensy-style routing: join agent_*/manager rooms based on role
+      let role = null;
+      try {
+        const storedRole = localStorage.getItem("role");
+        if (storedRole) {
+          role = String(storedRole).toLowerCase();
+        } else {
+          const rawUser = localStorage.getItem("user");
+          if (rawUser) {
+            const parsed = JSON.parse(rawUser);
+            if (parsed && parsed.role) {
+              role = String(parsed.role).toLowerCase();
+            }
+          }
+        }
+      } catch (e) {}
+
+      if (role === "agent") {
+        socket.emit("join", `agent_${userId}`);
+        console.log(`Joined agent room: agent_${userId}`);
+      } else {
+        // Default: treat as manager (receives requesting queue)
+        socket.emit("join", "manager");
+        console.log("Joined manager room");
+      }
     }
   });
 

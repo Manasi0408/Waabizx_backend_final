@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { getProfile, isAuthenticated, logout } from '../services/authService';
 import { getNotifications, markAsRead, markAllAsRead } from '../services/notificationService';
 import { getTemplates, getMetaTemplates } from '../services/templateService';
+import MainSidebarNav from '../components/MainSidebarNav';
 import {
   uploadCSV,
   getBroadcastContacts,
@@ -16,7 +17,6 @@ import { startCampaign } from '../services/campaignService';
 function Broadcast() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [notificationDropdownOpen, setNotificationDropdownOpen] = useState(false);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -52,7 +52,6 @@ function Broadcast() {
   const [contactsPagination, setContactsPagination] = useState({ total: 0, page: 1, pages: 1 });
   const [contactsSearch, setContactsSearch] = useState('');
   
-  const dropdownRef = useRef(null);
   const notificationRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -275,9 +274,11 @@ function Broadcast() {
         const mapped = { phone: contact.phone };
         templateVariables.forEach((v) => {
           const field = variableMapping[v.placeholder];
-          if (field && contact[field]) {
-            mapped[`var${v.number}`] = contact[field];
-          }
+          if (!field) return;
+          const val = (contact.customFields && contact.customFields[field] != null)
+            ? contact.customFields[field]
+            : contact[field];
+          if (val != null && val !== '') mapped[`var${v.number}`] = val;
         });
         return mapped;
       });
@@ -288,9 +289,11 @@ function Broadcast() {
         const mapped = { phone: contact.phone };
         templateVariables.forEach((v) => {
           const field = variableMapping[v.placeholder];
-          if (field && contact[field]) {
-            mapped[`var${v.number}`] = contact[field];
-          }
+          if (!field) return;
+          const val = (contact.customFields && contact.customFields[field] != null)
+            ? contact.customFields[field]
+            : contact[field];
+          if (val != null && val !== '') mapped[`var${v.number}`] = val;
         });
         return mapped;
       });
@@ -305,9 +308,31 @@ function Broadcast() {
       return;
     }
 
+    // Audience-specific validation (AiSensy-style)
+    if (audienceType === 'csv' && (!csvData || csvData.length === 0)) {
+      setError('Upload a CSV and make sure it has at least 1 phone number.');
+      return;
+    }
+    if (audienceType === 'contacts' && (!selectedContacts || selectedContacts.length === 0)) {
+      setError('Select at least 1 contact (Audience → Contacts).');
+      return;
+    }
+    if (audienceType === 'segment' && !selectedSegment) {
+      setError('Select a segment/tag first.');
+      return;
+    }
+    if (audienceType === 'segment' && (!segmentContacts || segmentContacts.length === 0)) {
+      setError('No contacts found for this segment/tag.');
+      return;
+    }
+    if (audienceType === 'manual' && parseManualNumbers().length === 0) {
+      setError('Add at least 1 phone number in manual list.');
+      return;
+    }
+
     const audienceData = prepareAudienceData();
     if (audienceData.length === 0) {
-      setError('No audience members found');
+      setError('No audience members found (check your audience selection and phone column).');
       return;
     }
 
@@ -343,7 +368,10 @@ function Broadcast() {
           setSuccess('Broadcast created and started successfully!');
         } catch (startError) {
           console.error('Error starting campaign:', startError);
-          setSuccess('Broadcast created. You can start it manually from Campaigns page.');
+          setError(startError.message || 'Broadcast created, but failed to start sending. Check template approval/token/WABA/recipient.');
+          // Do not redirect automatically; let user see the error.
+          setSaving(false);
+          return;
         }
       }
       
@@ -360,9 +388,6 @@ function Broadcast() {
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setProfileDropdownOpen(false);
-      }
       if (notificationRef.current && !notificationRef.current.contains(event.target)) {
         setNotificationDropdownOpen(false);
       }
@@ -371,11 +396,6 @@ function Broadcast() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
 
   const handleNotificationClick = async (notification) => {
     if (!notification.is_read) {
@@ -416,7 +436,6 @@ function Broadcast() {
   };
 
   const userName = user?.name || 'User';
-  const userEmail = user?.email || '';
   const userAvatar = user?.avatar || '';
   const userInitial = userName.charAt(0).toUpperCase();
 
@@ -432,9 +451,9 @@ function Broadcast() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
       {/* Top Navigation Bar */}
-      <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-4 flex justify-between items-center shadow-sm">
+      <header className="shrink-0 bg-white border-b border-gray-200 px-4 md:px-6 py-4 flex justify-between items-center shadow-sm">
         <div className="flex items-center gap-4">
           {/* Menu Toggle Button */}
           <button
@@ -596,157 +615,36 @@ function Broadcast() {
             )}
           </div>
           
-          {/* User Profile Dropdown */}
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
-              className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center cursor-pointer hover:ring-2 ring-blue-300 transition focus:outline-none"
-            >
-              {userAvatar ? (
-                <img 
-                  src={userAvatar} 
-                  alt={userName}
-                  className="w-full h-full rounded-full object-cover"
-                />
-              ) : (
-                <span className="text-white font-semibold text-sm">{userInitial}</span>
-              )}
-            </button>
-
-            {/* Dropdown Menu */}
-            {profileDropdownOpen && (
-              <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-xl border border-gray-200 py-2 z-50">
-                <div className="px-4 py-3 border-b border-gray-200">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center flex-shrink-0">
-                      {userAvatar ? (
-                        <img 
-                          src={userAvatar} 
-                          alt={userName}
-                          className="w-full h-full rounded-full object-cover"
-                        />
-                      ) : (
-                        <span className="text-white font-semibold text-lg">{userInitial}</span>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-800 truncate">{userName}</p>
-                      <p className="text-xs text-gray-500 truncate">{userEmail}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="py-1">
-                  <Link
-                    to="/settings"
-                    onClick={() => setProfileDropdownOpen(false)}
-                    className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition block"
-                  >
-                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                    <span>Settings</span>
-                  </Link>
-                </div>
-
-                <div className="border-t border-gray-200 pt-1">
-                  <button
-                    onClick={handleLogout}
-                    className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-3 transition"
-                  >
-                    <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                    </svg>
-                    <span>Logout</span>
-                  </button>
-                </div>
-              </div>
+          <button
+            type="button"
+            onClick={() => navigate('/settings')}
+            className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center cursor-pointer hover:ring-2 ring-blue-300 transition focus:outline-none"
+          >
+            {userAvatar ? (
+              <img
+                src={userAvatar}
+                alt={userName}
+                className="w-full h-full rounded-full object-cover"
+              />
+            ) : (
+              <span className="text-white font-semibold text-sm">{userInitial}</span>
             )}
-          </div>
+          </button>
         </div>
       </header>
 
-      <div className="flex">
+      <div className="flex flex-1 min-h-0">
         {/* Collapsible Sidebar */}
         <aside
-          className={`bg-white border-r border-gray-200 min-h-[calc(100vh-73px)] transition-all duration-300 ${
-            sidebarOpen ? 'w-64' : 'w-0 md:w-20'
-          } overflow-hidden`}
+          className={`bg-teal-900 text-white border-r border-teal-800 h-full shrink-0 flex flex-col overflow-hidden transition-all duration-300 ${
+            sidebarOpen ? 'w-20' : 'w-0 md:w-20'
+          }`}
         >
-          <nav className="p-4">
-            <ul className="space-y-2">
-              <li>
-                <Link to="/dashboard" className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition group">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                  </svg>
-                  <span className={sidebarOpen ? 'block' : 'hidden md:block'}>Dashboard</span>
-                </Link>
-              </li>
-              <li>
-                <Link to="/campaigns" className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition group">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                  </svg>
-                  <span className={sidebarOpen ? 'block' : 'hidden md:block'}>Campaigns</span>
-                </Link>
-              </li>
-              <li>
-                <Link to="/broadcast" className="flex items-center gap-3 px-4 py-3 bg-blue-50 text-blue-600 rounded-lg font-medium group">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
-                  </svg>
-                  <span className={sidebarOpen ? 'block' : 'hidden md:block'}>Broadcast</span>
-                </Link>
-              </li>
-              <li>
-                <Link to="/templates" className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition group">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                  <span className={sidebarOpen ? 'block' : 'hidden md:block'}>Templates</span>
-                </Link>
-              </li>
-              <li>
-                <Link to="/analytics" className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition group">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                  </svg>
-                  <span className={sidebarOpen ? 'block' : 'hidden md:block'}>Analytics</span>
-                </Link>
-              </li>
-              <li>
-                <Link to="/contacts" className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition group">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                  </svg>
-                  <span className={sidebarOpen ? 'block' : 'hidden md:block'}>Contacts</span>
-                </Link>
-              </li>
-              <li>
-                <Link to="/inbox" className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition group">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                  </svg>
-                  <span className={sidebarOpen ? 'block' : 'hidden md:block'}>Inbox</span>
-                </Link>
-              </li>
-              <li>
-                <Link to="/settings" className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition group">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  <span className={sidebarOpen ? 'block' : 'hidden md:block'}>Settings</span>
-                </Link>
-              </li>
-            </ul>
-          </nav>
+          <MainSidebarNav />
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 p-4 md:p-6 overflow-x-hidden">
+        <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 md:p-6">
           {error && (
             <div className="mb-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
               {error}
@@ -799,6 +697,7 @@ function Broadcast() {
                   <option value="en_US">English (US)</option>
                   <option value="en_GB">English (UK)</option>
                   <option value="hi_IN">Hindi</option>
+                  <option value="mr_IN">Marathi</option>
                 </select>
               </div>
 

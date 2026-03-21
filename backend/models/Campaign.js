@@ -19,8 +19,8 @@ const Campaign = sequelize.define('Campaign', {
     defaultValue: ''
   },
   status: {
-    type: DataTypes.ENUM('PENDING', 'PROCESSING', 'COMPLETED', 'PAUSED', 'draft', 'scheduled', 'active', 'completed', 'paused'),
-    defaultValue: 'PENDING'
+    type: DataTypes.ENUM('draft', 'PENDING', 'PROCESSING', 'COMPLETED', 'PAUSED', 'scheduled', 'active', 'completed', 'paused'),
+    defaultValue: 'draft'
   },
   type: {
     type: DataTypes.ENUM('broadcast', 'automation', 'sequence'),
@@ -37,6 +37,11 @@ const Campaign = sequelize.define('Campaign', {
   template_language: {
     type: DataTypes.STRING,
     defaultValue: 'en_US'
+  },
+  variable_mapping: {
+    type: DataTypes.JSON,
+    defaultValue: null,
+    comment: 'Map template vars e.g. { "1": "name", "2": "order_id" } for {{1}} {{2}}'
   },
   schedule_time: {
     type: DataTypes.DATE,

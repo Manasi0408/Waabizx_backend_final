@@ -34,23 +34,40 @@ exports.parseCSV = async (req, res) => {
     }
 
     const results = [];
-    const stream = Readable.from(req.file.buffer.toString());
+    const stream = Readable.from(req.file.buffer.toString('utf8'));
+    let detectedHeaders = [];
     
     await new Promise((resolve, reject) => {
       stream
-        .pipe(csv())
+        .pipe(csv({
+          mapHeaders: ({ header }) => {
+            // trim + remove BOM
+            const h = String(header || '').replace(/^\uFEFF/, '').trim();
+            return h;
+          }
+        }))
         .on('data', (row) => {
+          if (detectedHeaders.length === 0) detectedHeaders = Object.keys(row || {});
           // Normalize phone number (remove spaces, dashes, keep country code)
           // Try multiple column name variations
-          const phoneRaw = row.phone || row.Phone || row.PHONE || row.PhoneNumber || row['phone number'] || '';
-          const phone = String(phoneRaw).trim().replace(/[\s\-\(\)]/g, '');
+          const keys = Object.keys(row || {});
+          const phoneKey =
+            keys.find(k => /^phone$/i.test(k)) ||
+            keys.find(k => /phone\s*number/i.test(k)) ||
+            keys.find(k => /phonenumber/i.test(k)) ||
+            keys.find(k => /mobile/i.test(k)) ||
+            keys.find(k => /msisdn/i.test(k)) ||
+            keys.find(k => /number/i.test(k));
+
+          const phoneRaw = phoneKey ? row[phoneKey] : (row.phone || row.Phone || row.PHONE || row.PhoneNumber || row['phone number'] || '');
+          const phone = String(phoneRaw || '').trim().replace(/\D/g, '');
           
           if (phone && phone.length >= 10) {
             // Extract all other columns as variables
             const variables = {};
             Object.keys(row).forEach(key => {
               const keyLower = key.toLowerCase();
-              if (keyLower !== 'phone' && keyLower !== 'phonenumber' && keyLower !== 'phone number') {
+              if (!/^(phone|phonenumber|phone number|phone\s*number|mobile|msisdn)$/i.test(keyLower)) {
                 variables[key] = row[key] || '';
               }
             });
@@ -73,7 +90,7 @@ exports.parseCSV = async (req, res) => {
     if (results.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'No valid phone numbers found in CSV. Please ensure CSV has a "phone" column with valid numbers.'
+        message: `No valid phone numbers found in CSV. Detected columns: ${detectedHeaders.join(', ') || '(none)'} . Please ensure CSV has a phone column (phone/Phone Number/mobile) with valid numbers including country code.`
       });
     }
     
@@ -132,6 +149,7 @@ exports.getContacts = async (req, res) => {
         name: c.name || c.phone,
         email: c.email,
         tags: c.tags || [],
+        customFields: c.customFields || {},
         lastContacted: c.lastContacted
       })),
       pagination: {
@@ -204,7 +222,7 @@ exports.getContactsBySegment = async (req, res) => {
         userId,
         tags: { [Op.contains]: [tag] }
       },
-      attributes: ['id', 'phone', 'name', 'email', 'tags']
+      attributes: ['id', 'phone', 'name', 'email', 'tags', 'customFields']
     });
     
     res.json({
@@ -214,7 +232,8 @@ exports.getContactsBySegment = async (req, res) => {
         phone: c.phone,
         name: c.name || c.phone,
         email: c.email,
-        tags: c.tags || []
+        tags: c.tags || [],
+        customFields: c.customFields || {}
       })),
       count: contacts.length
     });
@@ -350,7 +369,10 @@ exports.createBroadcast = async (req, res) => {
         // Map contact fields to variables if needed
         ...(variable_mapping && Object.keys(variable_mapping).reduce((acc, key) => {
           const field = variable_mapping[key];
-          if (c[field]) acc[`var${key.replace(/[{}]/g, '')}`] = c[field];
+          const fromCustom = c.customFields && c.customFields[field] != null ? c.customFields[field] : null;
+          const fromRoot = c[field] != null ? c[field] : null;
+          const val = fromCustom != null ? fromCustom : fromRoot;
+          if (val != null) acc[`var${key.replace(/[{}]/g, '')}`] = val;
           return acc;
         }, {}))
       }));
@@ -376,7 +398,10 @@ exports.createBroadcast = async (req, res) => {
         email: c.email,
         ...(variable_mapping && Object.keys(variable_mapping).reduce((acc, key) => {
           const field = variable_mapping[key];
-          if (c[field]) acc[`var${key.replace(/[{}]/g, '')}`] = c[field];
+          const fromCustom = c.customFields && c.customFields[field] != null ? c.customFields[field] : null;
+          const fromRoot = c[field] != null ? c[field] : null;
+          const val = fromCustom != null ? fromCustom : fromRoot;
+          if (val != null) acc[`var${key.replace(/[{}]/g, '')}`] = val;
           return acc;
         }, {}))
       }));
@@ -444,6 +469,7 @@ exports.createBroadcast = async (req, res) => {
       name,
       template_name,
       template_language,
+      variable_mapping: variable_mapping || null,
       schedule_time: schedule_time ? new Date(schedule_time) : null,
       status: 'PENDING',
       type: 'broadcast',

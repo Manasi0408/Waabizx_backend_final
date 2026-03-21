@@ -9,7 +9,9 @@ const getTimeRange = (req) => {
 exports.getOverview = async (req, res) => {
   try {
     const timeRange = getTimeRange(req);
-    const data = await AnalyticsModel.getOverview(timeRange);
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: 'User not authenticated' });
+    const data = await AnalyticsModel.getOverview(timeRange, userId);
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -33,7 +35,9 @@ exports.getCampaignAnalytics = async (req, res) => {
 exports.getMessageAnalytics = async (req, res) => {
   try {
     const timeRange = getTimeRange(req);
-    const data = await AnalyticsModel.getMessageAnalytics(timeRange);
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: 'User not authenticated' });
+    const data = await AnalyticsModel.getMessageAnalytics(timeRange, userId);
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -43,7 +47,9 @@ exports.getMessageAnalytics = async (req, res) => {
 exports.getContactAnalytics = async (req, res) => {
   try {
     const timeRange = getTimeRange(req);
-    const data = await AnalyticsModel.getContactAnalytics(timeRange);
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: 'User not authenticated' });
+    const data = await AnalyticsModel.getContactAnalytics(timeRange, userId);
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -53,7 +59,9 @@ exports.getContactAnalytics = async (req, res) => {
 exports.getCostAnalytics = async (req, res) => {
   try {
     const timeRange = getTimeRange(req);
-    const data = await AnalyticsModel.getCostAnalytics(timeRange);
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: 'User not authenticated' });
+    const data = await AnalyticsModel.getCostAnalytics(timeRange, userId);
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

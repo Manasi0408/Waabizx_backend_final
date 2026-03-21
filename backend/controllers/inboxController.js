@@ -3,16 +3,23 @@ const { Op } = require('sequelize');
 const { sendText, sendTemplate } = require('../services/whatsappService');
 const socketService = require('../services/socketService');
 
+const isAgentRole = (r) => (r || '').toString().toLowerCase() === 'agent';
+
 // Get inbox chat list - one row per contact with last message and unread count
 // Includes contacts from Message table AND meta_messages table
+// For agents (e.g. /campaign-reports history): return all contacts so they see same as admin inbox
 exports.getInboxList = async (req, res) => {
   try {
     const userId = req.user.id;
+    const role = (req.user.role || '').toString().toLowerCase();
+    const agentSeesAll = isAgentRole(role);
     const contactTableName = Contact.tableName;
     const messageTableName = Message.tableName;
     const metaMessageTableName = MetaMessage.tableName;
 
-    // Get all contacts that have messages in Message table OR meta_messages table
+    const userFilter = agentSeesAll ? '' : 'AND c.userId = :userId';
+    const replacements = agentSeesAll ? {} : { userId };
+
     const inboxList = await sequelize.query(`
       SELECT DISTINCT
         c.id as contactId,
@@ -55,7 +62,7 @@ exports.getInboxList = async (req, res) => {
             AND m.status != 'read'
         ) as unreadCount
       FROM \`${contactTableName}\` c
-      WHERE c.userId = :userId
+      WHERE 1=1 ${userFilter}
         AND (
           EXISTS (
             SELECT 1 
@@ -70,11 +77,10 @@ exports.getInboxList = async (req, res) => {
         )
       ORDER BY lastMessageTime DESC
     `, {
-      replacements: { userId },
+      replacements,
       type: sequelize.QueryTypes.SELECT
     });
 
-    // Also get contacts from meta_messages that don't have a Contact record yet
     const metaMessagesContacts = await sequelize.query(`
       SELECT DISTINCT
         NULL as contactId,
@@ -92,15 +98,11 @@ exports.getInboxList = async (req, res) => {
         MAX(mm.created_at) as lastMessageTime,
         0 as unreadCount
       FROM \`${metaMessageTableName}\` mm
-      WHERE NOT EXISTS (
-        SELECT 1 
-        FROM \`${contactTableName}\` c 
-        WHERE c.phone = mm.phone AND c.userId = :userId
-      )
+      ${agentSeesAll ? '' : 'WHERE NOT EXISTS (SELECT 1 FROM `' + contactTableName + '` c2 WHERE c2.phone = mm.phone AND c2.userId = :userId)'}
       GROUP BY mm.phone
       ORDER BY lastMessageTime DESC
     `, {
-      replacements: { userId },
+      replacements,
       type: sequelize.QueryTypes.SELECT
     });
 
@@ -156,24 +158,20 @@ exports.getInboxList = async (req, res) => {
 exports.getContactMessages = async (req, res) => {
   try {
     const userId = req.user.id;
+    const role = (req.user.role || '').toString().toLowerCase();
+    const agentSeesAll = isAgentRole(role);
     // Decode phone number - handle both encoded and non-encoded formats
     let phone = req.params.phone;
     try {
-      // Try decoding (in case it's encoded)
       phone = decodeURIComponent(phone);
     } catch (e) {
-      // If decoding fails, use as-is
       phone = req.params.phone;
     }
-    // Also handle %2B which is encoded +
     phone = phone.replace(/%2B/g, '+');
 
-    // Find contact by phone and userId
+    const contactWhere = agentSeesAll ? { phone } : { phone, userId };
     const contact = await Contact.findOne({
-      where: {
-        phone,
-        userId
-      }
+      where: contactWhere
     });
 
     if (!contact) {
@@ -202,12 +200,11 @@ exports.getContactMessages = async (req, res) => {
       ]
     });
 
-    // Also get messages from InboxMessage table (includes template messages)
+    const inboxMessageWhere = agentSeesAll
+      ? { contactId: contact.id }
+      : { contactId: contact.id, userId };
     const inboxMessages = await InboxMessage.findAll({
-      where: {
-        contactId: contact.id,
-        userId: userId
-      },
+      where: inboxMessageWhere,
       order: [['timestamp', 'ASC']],
       attributes: [
         'id',

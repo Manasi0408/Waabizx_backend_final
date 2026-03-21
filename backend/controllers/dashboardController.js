@@ -65,10 +65,12 @@ exports.getDashboardStats = async (req, res) => {
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
 
-      // Fetch all messages with timestamps to convert to local time
+      // Fetch messages with timestamps + status so we can build
+      // multiple time-series (sent/delivered/read/failed) for the charts.
       const chartData = await sequelize.query(`
-        SELECT 
-          im.timestamp as timestamp
+        SELECT
+          im.timestamp as timestamp,
+          im.status as status
         FROM InboxMessages im
         WHERE im.userId = :userId
           AND im.direction = 'outgoing'
@@ -80,12 +82,27 @@ exports.getDashboardStats = async (req, res) => {
       });
 
       // Group messages by local hour
-      const hourMap = {};
+      const hourMap = {
+        sent: {},
+        delivered: {},
+        read: {},
+        failed: {},
+      };
       chartData.forEach(item => {
-        // Convert timestamp to local time and extract hour
         const localDate = new Date(item.timestamp);
         const localHour = localDate.getHours();
-        hourMap[localHour] = (hourMap[localHour] || 0) + 1;
+        const status = String(item.status || '').toLowerCase();
+
+        if (status === 'delivered') {
+          hourMap.delivered[localHour] = (hourMap.delivered[localHour] || 0) + 1;
+        } else if (status === 'read') {
+          hourMap.read[localHour] = (hourMap.read[localHour] || 0) + 1;
+        } else if (status === 'failed') {
+          hourMap.failed[localHour] = (hourMap.failed[localHour] || 0) + 1;
+        } else {
+          // Default to 'sent'
+          hourMap.sent[localHour] = (hourMap.sent[localHour] || 0) + 1;
+        }
       });
 
       // Generate all 24 hours for today with correct labels
@@ -93,7 +110,11 @@ exports.getDashboardStats = async (req, res) => {
         const hourLabel = hour === 0 ? '12 AM' : hour < 12 ? `${hour} AM` : hour === 12 ? '12 PM' : `${hour - 12} PM`;
         formattedChartData.push({
           name: hourLabel,
-          messages: hourMap[hour] || 0
+          // Keep the old key name so existing Dashboard UI keeps working.
+          messages: hourMap.sent[hour] || 0,
+          delivered: hourMap.delivered[hour] || 0,
+          read: hourMap.read[hour] || 0,
+          failed: hourMap.failed[hour] || 0,
         });
       }
     } else {
@@ -102,27 +123,45 @@ exports.getDashboardStats = async (req, res) => {
       daysAgo.setDate(daysAgo.getDate() - validDays);
       daysAgo.setHours(0, 0, 0, 0); // Start of day
 
-      // Fetch real message data from InboxMessage table
+      // Fetch real message data from InboxMessage table (grouped by day + status)
       const chartData = await sequelize.query(`
-        SELECT 
+        SELECT
           DATE(im.timestamp) as date,
-          COUNT(im.id) as messages
+          im.status as status,
+          COUNT(im.id) as count
         FROM InboxMessages im
         WHERE im.userId = :userId
           AND im.direction = 'outgoing'
           AND im.timestamp >= :daysAgo
-        GROUP BY DATE(im.timestamp)
+        GROUP BY DATE(im.timestamp), im.status
         ORDER BY DATE(im.timestamp) ASC
       `, {
         replacements: { userId, daysAgo },
         type: sequelize.QueryTypes.SELECT
       });
 
-      // Create a map of dates with message counts
-      const dataMap = {};
+      // Create maps of dates with per-status message counts
+      const dataMap = {
+        sent: {},
+        delivered: {},
+        read: {},
+        failed: {},
+      };
       chartData.forEach(item => {
         const dateKey = new Date(item.date).toISOString().split('T')[0];
-        dataMap[dateKey] = parseInt(item.messages) || 0;
+        const status = String(item.status || '').toLowerCase();
+        const count = parseInt(item.count) || 0;
+
+        if (status === 'delivered') {
+          dataMap.delivered[dateKey] = count;
+        } else if (status === 'read') {
+          dataMap.read[dateKey] = count;
+        } else if (status === 'failed') {
+          dataMap.failed[dateKey] = count;
+        } else {
+          // Default to sent
+          dataMap.sent[dateKey] = count;
+        }
       });
 
       // Generate complete date range with all days filled
@@ -145,7 +184,11 @@ exports.getDashboardStats = async (req, res) => {
 
         formattedChartData.push({
           name: name,
-          messages: dataMap[dateKey] || 0
+          // Keep the old key name so existing Dashboard UI keeps working.
+          messages: dataMap.sent[dateKey] || 0,
+          delivered: dataMap.delivered[dateKey] || 0,
+          read: dataMap.read[dateKey] || 0,
+          failed: dataMap.failed[dateKey] || 0,
         });
       }
     }
@@ -253,6 +296,76 @@ exports.getDashboardStats = async (req, res) => {
   }
 };
 
+// Agent conversation activity aggregated for the last 12 months.
+// Uses agent_conversations.last_message_time and current status to build
+// time-series counts (dynamic, not static).
+exports.getAgentActivity = async (req, res) => {
+  try {
+    const now = new Date();
+    const startDate = new Date(now.getFullYear(), now.getMonth() - 11, 1, 0, 0, 0, 0);
+
+    const rows = await sequelize.query(`
+      SELECT
+        DATE_FORMAT(ac.last_message_time, '%Y-%m') as ym,
+        LOWER(ac.status) as status,
+        COUNT(*) as count
+      FROM agent_conversations ac
+      WHERE ac.last_message_time IS NOT NULL
+        AND ac.last_message_time >= :startDate
+      GROUP BY ym, status
+      ORDER BY ym ASC
+    `, {
+      replacements: { startDate },
+      type: sequelize.QueryTypes.SELECT,
+    });
+
+    const monthDefs = [];
+    const statusKeys = ['active', 'closed', 'requesting', 'intervened'];
+
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - 11 + i, 1);
+      const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const label = d.toLocaleDateString('en-US', { month: 'short' });
+      monthDefs.push({ ym, label });
+    }
+
+    const seriesMap = {};
+    monthDefs.forEach(m => {
+      seriesMap[m.ym] = {
+        active: 0,
+        closed: 0,
+        requesting: 0,
+        intervened: 0,
+      };
+    });
+
+    (rows || []).forEach(row => {
+      const ym = row.ym;
+      const status = String(row.status || '').toLowerCase();
+      const count = parseInt(row.count) || 0;
+
+      if (seriesMap[ym] && statusKeys.includes(status)) {
+        seriesMap[ym][status] = count;
+      }
+    });
+
+    const data = monthDefs.map(m => ({
+      name: m.label,
+      ...seriesMap[m.ym],
+    }));
+
+    res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+    });
+  }
+};
 
 // Helper function to format time ago
 function formatTimeAgo(date) {

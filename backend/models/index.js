@@ -11,6 +11,7 @@ const InboxMessage = require('./InboxMessage');
 const ClientWhatsApp = require('./ClientWhatsApp');
 const Client = require('./Client');
 const WhatsAppAccount = require('./WhatsAppAccount');
+const CannedMessage = require('./CannedMessage');
 
 // Import meta models for webhooks
 const WebhookLog = require('./metaWebhook')(sequelize, DataTypes);
@@ -49,6 +50,9 @@ ClientWhatsApp.belongsTo(User, { foreignKey: 'client_id' });
 
 Client.hasMany(WhatsAppAccount, { foreignKey: 'client_id', onDelete: 'CASCADE' });
 WhatsAppAccount.belongsTo(Client, { foreignKey: 'client_id' });
+
+User.hasMany(CannedMessage, { foreignKey: 'userId', onDelete: 'CASCADE' });
+CannedMessage.belongsTo(User, { foreignKey: 'userId' });
 
 const syncDatabase = async () => {
   try {
@@ -89,6 +93,13 @@ const syncDatabase = async () => {
     } catch (templateError) {
       console.error('⚠️  Template table sync error:', templateError.message);
     }
+    // Ensure User table has updated role ENUM (admin, manager, agent, user)
+    try {
+      await User.sync({ force: false, alter: true });
+      console.log('✅ User table synced with updated roles (admin, manager, agent, user).');
+    } catch (userError) {
+      console.error('⚠️  User table sync error:', userError.message);
+    }
     // Ensure Contact table has whatsappOptInAt for keyword opt-in
     try {
       const Contact = require('./Contact');
@@ -117,6 +128,14 @@ const syncDatabase = async () => {
     } catch (waAccError) {
       console.error('⚠️  WhatsAppAccount table sync error:', waAccError.message);
     }
+
+    // Ensure CannedMessage table exists
+    try {
+      await CannedMessage.sync({ force: false, alter: true });
+      console.log('✅ CannedMessage table verified/created.');
+    } catch (cannedError) {
+      console.error('⚠️  CannedMessage table sync error:', cannedError.message);
+    }
   } catch (error) {
     console.error('❌ Database synchronization failed:', error.message);
     console.error('Full error:', error);
@@ -138,6 +157,7 @@ module.exports = {
   ClientWhatsApp,
   Client,
   WhatsAppAccount,
+  CannedMessage,
   WebhookLog,
   MetaMessage,
   syncDatabase

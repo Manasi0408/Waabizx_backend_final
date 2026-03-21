@@ -38,6 +38,23 @@ export const createContact = async (contactData) => {
   }
 };
 
+// Upload CSV and save to contacts table (campaign flow Step 2)
+export const uploadContactsCSV = async (file) => {
+  const token = getToken();
+  if (!token) throw new Error('No token found');
+  const formData = new FormData();
+  formData.append('csvFile', file);
+  const response = await fetch(`${API_URL}/contacts/upload-csv`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` },
+    body: formData
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.message || data.error || 'Failed to upload CSV');
+  if (!data.success) throw new Error(data.message || 'Failed to upload CSV');
+  return data;
+};
+
 // Get all contacts
 export const getContacts = async (filters = {}) => {
   try {
@@ -46,9 +63,10 @@ export const getContacts = async (filters = {}) => {
       throw new Error('No token found');
     }
 
-    const { status, search, page = 1, limit = 20 } = filters;
+    const { status, type, search, page = 1, limit = 20 } = filters;
     const params = new URLSearchParams();
     if (status) params.append('status', status);
+    if (type) params.append('type', type);
     if (search) params.append('search', search);
     params.append('page', page);
     params.append('limit', limit);

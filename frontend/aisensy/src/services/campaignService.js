@@ -286,6 +286,24 @@ export const resumeCampaign = async (campaignId) => {
   }
 };
 
+// Add contacts to campaign with variable mapping
+export const addContactsToCampaign = async (campaignId, { contactIds, variable_mapping }) => {
+  const token = getToken();
+  if (!token) throw new Error('No token found');
+  const response = await fetch(`${API_URL}/campaigns/${campaignId}/contacts`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ contactIds, variable_mapping })
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.message || data.error || 'Failed to add contacts');
+  if (!data.success) throw new Error(data.message || 'Failed to add contacts');
+  return data;
+};
+
 // Get campaign audience logs
 export const getCampaignAudience = async (campaignId) => {
   try {

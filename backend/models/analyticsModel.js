@@ -23,7 +23,7 @@ const getDateFilter = (timeRange, dateColumn = 'sentAt') => {
 const AnalyticsModel = {
 
   // OVERVIEW
-  getOverview: async (timeRange = 'all') => {
+  getOverview: async (timeRange = 'all', userId) => {
     const dateFilter = getDateFilter(timeRange, 'sentAt');
     const [rows] = await db.query(`
       SELECT
@@ -32,9 +32,12 @@ const AnalyticsModel = {
         SUM(status = 'read') AS \`read\`,
         SUM(status = 'failed') AS failed,
         SUM(type = 'incoming') AS replies
-      FROM messages
+      FROM messages m
+      LEFT JOIN contacts ctt ON ctt.id = m.contactId
+      LEFT JOIN campaigns cc ON cc.id = m.campaignId
       WHERE ${dateFilter}
-    `);
+        AND (ctt.userId = ? OR cc.userId = ?)
+    `, [userId, userId]);
     return rows[0];
   },
 
@@ -130,7 +133,7 @@ const AnalyticsModel = {
   },
 
   // MESSAGE ANALYTICS
-  getMessageAnalytics: async (timeRange = 'all') => {
+  getMessageAnalytics: async (timeRange = 'all', userId) => {
     const dateFilter = getDateFilter(timeRange, 'sentAt');
     const [rows] = await db.query(`
       SELECT
@@ -138,34 +141,38 @@ const AnalyticsModel = {
         0 AS image,
         0 AS button,
         0 AS linkClicks
-      FROM messages
-      WHERE type = 'outgoing' AND ${dateFilter}
-    `);
+      FROM messages m
+      LEFT JOIN contacts ctt ON ctt.id = m.contactId
+      LEFT JOIN campaigns cc ON cc.id = m.campaignId
+      WHERE m.type = 'outgoing' AND ${dateFilter}
+        AND (ctt.userId = ? OR cc.userId = ?)
+    `, [userId, userId]);
     return rows[0];
   },
 
   // CONTACT ANALYTICS
-  getContactAnalytics: async (timeRange = 'all') => {
+  getContactAnalytics: async (timeRange = 'all', userId) => {
     const contactDateFilter = getDateFilter(timeRange, 'createdAt');
     const messageDateFilter = getDateFilter(timeRange, 'sentAt');
     
     const [[totalContacts]] = await db.query(`
       SELECT COUNT(*) total FROM contacts 
-      WHERE ${contactDateFilter}
-    `);
+      WHERE userId = ? AND ${contactDateFilter}
+    `, [userId]);
     const [[optedOut]] = await db.query(`
       SELECT COUNT(*) total FROM contacts 
-      WHERE status = 'unsubscribed' AND ${contactDateFilter}
-    `);
+      WHERE userId = ? AND status = 'unsubscribed' AND ${contactDateFilter}
+    `, [userId]);
     const [[newToday]] = await db.query(`
       SELECT COUNT(*) total FROM contacts
-      WHERE DATE(createdAt) = CURDATE()
-    `);
+      WHERE userId = ? AND DATE(createdAt) = CURDATE()
+    `, [userId]);
     const [[activeUsers]] = await db.query(`
       SELECT COUNT(DISTINCT contactId) total
-      FROM messages
-      WHERE type = 'incoming' AND ${messageDateFilter}
-    `);
+      FROM messages m
+      INNER JOIN contacts ctt ON ctt.id = m.contactId
+      WHERE m.type = 'incoming' AND ${messageDateFilter} AND ctt.userId = ?
+    `, [userId]);
 
     return {
       totalContacts: totalContacts.total,
@@ -176,13 +183,16 @@ const AnalyticsModel = {
   },
 
   // COST ANALYTICS (Dummy Logic for Now)
-  getCostAnalytics: async (timeRange = 'all') => {
+  getCostAnalytics: async (timeRange = 'all', userId) => {
     const dateFilter = getDateFilter(timeRange, 'sentAt');
     const [rows] = await db.query(`
       SELECT COUNT(*) conversations
-      FROM messages
-      WHERE type = 'outgoing' AND ${dateFilter}
-    `);
+      FROM messages m
+      LEFT JOIN contacts ctt ON ctt.id = m.contactId
+      LEFT JOIN campaigns cc ON cc.id = m.campaignId
+      WHERE m.type = 'outgoing' AND ${dateFilter}
+        AND (ctt.userId = ? OR cc.userId = ?)
+    `, [userId, userId]);
 
     const conversations = rows[0].conversations;
     const costPerConversation = 0.3; // ₹0.30 dummy
@@ -196,9 +206,13 @@ const AnalyticsModel = {
       // Get monthly cost
       const [monthRows] = await db.query(`
         SELECT COUNT(*) conversations
-        FROM messages
-        WHERE type = 'outgoing' AND sentAt >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)
-      `);
+        FROM messages m
+        LEFT JOIN contacts ctt ON ctt.id = m.contactId
+        LEFT JOIN campaigns cc ON cc.id = m.campaignId
+        WHERE m.type = 'outgoing'
+          AND m.sentAt >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)
+          AND (ctt.userId = ? OR cc.userId = ?)
+      `, [userId, userId]);
       costThisMonth = (monthRows[0].conversations * costPerConversation).toFixed(2);
     } else if (timeRange === 'week') {
       costToday = (costPerConversation * 20).toFixed(2); // Dummy for today
@@ -208,9 +222,13 @@ const AnalyticsModel = {
       // Get monthly cost
       const [monthRows] = await db.query(`
         SELECT COUNT(*) conversations
-        FROM messages
-        WHERE type = 'outgoing' AND sentAt >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)
-      `);
+        FROM messages m
+        LEFT JOIN contacts ctt ON ctt.id = m.contactId
+        LEFT JOIN campaigns cc ON cc.id = m.campaignId
+        WHERE m.type = 'outgoing'
+          AND m.sentAt >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)
+          AND (ctt.userId = ? OR cc.userId = ?)
+      `, [userId, userId]);
       costThisMonth = (monthRows[0].conversations * costPerConversation).toFixed(2);
     } else {
       costToday = (costPerConversation * 20).toFixed(2);

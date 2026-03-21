@@ -37,7 +37,7 @@ const User = sequelize.define('User', {
     defaultValue: null
   },
   role: {
-    type: DataTypes.ENUM('admin', 'user'),
+    type: DataTypes.ENUM('admin', 'manager', 'agent', 'user'),
     defaultValue: 'user'
   },
   status: {
@@ -46,6 +46,11 @@ const User = sequelize.define('User', {
   },
   lastLogin: {
     type: DataTypes.DATE,
+    defaultValue: null
+  },
+  currentSessionId: {
+    type: DataTypes.STRING(64),
+    allowNull: true,
     defaultValue: null
   }
 }, {

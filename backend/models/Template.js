@@ -22,12 +22,37 @@ const Template = sequelize.define('Template', {
     }
   },
   category: {
-    type: DataTypes.ENUM('welcome', 'promotional', 'marketing', 'transactional', 'notification', 'other'),
+    type: DataTypes.ENUM('welcome', 'promotional', 'marketing', 'utility', 'transactional', 'notification', 'other'),
     defaultValue: 'other'
   },
   status: {
     type: DataTypes.ENUM('draft', 'approved', 'rejected'),
     defaultValue: 'draft'
+  },
+  metaTemplateId: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: null
+  },
+  metaStatus: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: null
+  },
+  rejectionReason: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: null
+  },
+  rejectionInfo: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    defaultValue: null
+  },
+  rejectionRecommendation: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    defaultValue: null
   },
   variables: {
     type: DataTypes.JSON,

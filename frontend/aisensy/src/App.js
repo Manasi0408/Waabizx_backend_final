@@ -199,6 +199,20 @@ import Analytics from './pages/Analytics';
 import Contacts from './pages/Contacts';
 import Inbox from './pages/Inbox';
 import Chatbot from './components/Chatbot';
+import ProjectLogin from './pages/ProjectLogin';
+import ProjectDashboard from './pages/ProjectDashboard';
+import AgentHomePage from './pages/AgentHomePage';
+import AgentAnalyticsPage from './pages/AgentAnalyticsPage';
+import BroadcastCampaignPage from './pages/BroadcastCampaignPage';
+import LiveChatPage from './pages/LiveChatPage';
+import TemplateMessagesPage from './pages/TemplateMessagesPage';
+import ContactManagementPage from './pages/ContactManagementPage';
+import ManagePage from './pages/ManagePage';
+import CampaignReportsPage from './pages/CampaignReportsPage';
+import HistoryPage from './pages/HistoryPage';
+import AgentChatPage from './pages/AgentChatPage';
+import AdminDashboard from './pages/AdminDashboard';
+import AgentDashboard from './pages/AgentDashboard';
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -208,6 +222,29 @@ const ProtectedRoute = ({ children }) => {
 // Public Route Component
 const PublicRoute = ({ children }) => {
   return !isAuthenticated() ? children : <Navigate to="/dashboard" replace />;
+};
+
+// Admin-only route: show ProjectDashboard if user role is admin, else redirect to /
+const AdminDashboardRoute = () => {
+  let isAdmin = false;
+  try {
+    const raw = localStorage.getItem("user");
+    if (raw) {
+      const user = JSON.parse(raw);
+      isAdmin = String(user?.role || "").toLowerCase() === "admin";
+    }
+  } catch (e) {}
+  return isAdmin ? <ProjectDashboard /> : <Navigate to="/" replace />;
+};
+
+// Agent dashboard: agent or admin with token can access (admin when viewing a project); else redirect to /login
+const AgentDashboardRoute = () => {
+  const token = localStorage.getItem("token");
+  const role = (localStorage.getItem("role") || "").toLowerCase();
+  if (token && (role === "agent" || role === "admin")) {
+    return <AgentHomePage />;
+  }
+  return <Navigate to="/login" replace />;
 };
 
 // Connect WhatsApp — direct OAuth redirect (no SDK). Meta redirects to /meta/callback?code=...&state=clientId
@@ -233,7 +270,7 @@ function ConnectWhatsApp() {
         const payload = JSON.parse(atob(token.split(".")[1]));
         clientId = payload.id;
       }
-    } catch (e) {}
+    } catch (e) { }
 
     if (!APP_ID || !REDIRECT_URI) {
       alert("Missing APP_ID or REDIRECT_URI. Check .env and restart dev server (npm start).");
@@ -254,8 +291,20 @@ function ConnectWhatsApp() {
   };
 
   return (
-    <div style={{ textAlign: "center", marginTop: "100px" }}>
-      <button onClick={connectWhatsApp}>Connect WhatsApp</button>
+    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-4 py-12">
+      <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-8 text-center shadow-sm">
+        <h1 className="text-lg font-semibold text-gray-900">WhatsApp Business</h1>
+        <p className="mt-2 text-sm text-gray-600">
+          Sign in with Meta to connect your WhatsApp Business account.
+        </p>
+        <button
+          type="button"
+          onClick={connectWhatsApp}
+          className="mt-6 w-full rounded-lg bg-teal-700 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2"
+        >
+          Connect WhatsApp
+        </button>
+      </div>
     </div>
   );
 }
@@ -347,6 +396,51 @@ function App() {
         />
 
         <Route
+          path="/manage"
+          element={
+            <ProtectedRoute>
+              <ManagePage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/live-chat"
+          element={
+            <ProtectedRoute>
+              <LiveChatPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/campaign-reports"
+          element={
+            <ProtectedRoute>
+              <HistoryPage />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Simple project login/dashboard demo (uses axios instance and projects API) */}
+        <Route
+          path="/project-login"
+          element={
+            <PublicRoute>
+              <ProjectLogin />
+            </PublicRoute>
+          }
+        />
+        <Route
+          path="/project-dashboard"
+          element={<AdminDashboardRoute />}
+        />
+        <Route
+          path="/agent-dashboard"
+          element={<AgentDashboardRoute />}
+        />
+
+        <Route
           path="/inbox"
           element={
             <ProtectedRoute>
@@ -364,7 +458,10 @@ function App() {
           }
         />
 
+        <Route path="/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
+        <Route path="/agent" element={<ProtectedRoute><AgentDashboard /></ProtectedRoute>} />
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/agent-chat" element={<AgentChatPage />} />
 
       </Routes>
 

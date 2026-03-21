@@ -50,6 +50,11 @@ const Contact = sequelize.define('Contact', {
     type: DataTypes.TEXT,
     defaultValue: ''
   },
+  customFields: {
+    type: DataTypes.JSON,
+    defaultValue: {},
+    comment: 'CSV columns e.g. order_id, custom vars for campaign mapping'
+  },
   userId: {
     type: DataTypes.INTEGER,
     allowNull: false

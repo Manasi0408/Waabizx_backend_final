@@ -1,4 +1,5 @@
-const API_URL = 'http://localhost:5000/api';
+const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
+const API_URL = `${API_BASE.replace(/\/$/, "")}/api`;
 
 // Get token from localStorage
 const getToken = () => {
@@ -18,11 +19,13 @@ const removeToken = () => {
 // Register user
 export const register = async (name, email, password) => {
   try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (API_BASE && API_BASE.includes('ngrok')) {
+      headers['ngrok-skip-browser-warning'] = 'true';
+    }
     const response = await fetch(`${API_URL}/auth/register`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({ name, email, password }),
     });
 
@@ -32,8 +35,8 @@ export const register = async (name, email, password) => {
       throw new Error(data.message || 'Registration failed');
     }
 
-    if (data.success && data.token) {
-      setToken(data.token);
+    if (data.success) {
+      // Do not auto-login; user will sign in from login page
       return data;
     }
 
@@ -46,11 +49,13 @@ export const register = async (name, email, password) => {
 // Login user
 export const login = async (email, password) => {
   try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (API_BASE && API_BASE.includes('ngrok')) {
+      headers['ngrok-skip-browser-warning'] = 'true';
+    }
     const response = await fetch(`${API_URL}/auth/login`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({ email, password }),
     });
 
@@ -62,6 +67,7 @@ export const login = async (email, password) => {
 
     if (data.success && data.token) {
       setToken(data.token);
+      console.log('Access Token:', data.token);
       return data;
     }
 
@@ -74,6 +80,10 @@ export const login = async (email, password) => {
 // Logout user
 export const logout = () => {
   removeToken();
+  try {
+    localStorage.removeItem('role');
+    localStorage.removeItem('user');
+  } catch (e) {}
 };
 
 // Check if user is authenticated
@@ -89,12 +99,16 @@ export const getProfile = async () => {
       throw new Error('No token found');
     }
 
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    };
+    if (API_BASE && API_BASE.includes('ngrok')) {
+      headers['ngrok-skip-browser-warning'] = 'true';
+    }
     const response = await fetch(`${API_URL}/auth/profile`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      }
+      headers,
     });
 
     const data = await response.json();
@@ -111,6 +125,38 @@ export const getProfile = async () => {
   } catch (error) {
     throw error;
   }
+};
+
+export const updateProfile = async (payload) => {
+  const token = getToken();
+  if (!token) {
+    throw new Error('No token found');
+  }
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`,
+  };
+  if (API_BASE && API_BASE.includes('ngrok')) {
+    headers['ngrok-skip-browser-warning'] = 'true';
+  }
+
+  const response = await fetch(`${API_URL}/auth/profile`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(payload || {}),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || 'Failed to update profile');
+  }
+
+  if (data.success && data.user) {
+    return data;
+  }
+
+  throw new Error(data.message || 'Failed to update profile');
 };
 
 // Get stored token

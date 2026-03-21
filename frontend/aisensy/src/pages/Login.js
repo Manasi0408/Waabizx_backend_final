@@ -1,13 +1,15 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { login } from '../services/authService';
 
 function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [formData, setFormData] = useState({
-    email: '',
+    email: location.state?.email ?? '',
     password: '',
   });
+  const showRegisteredMessage = !!location.state?.registered;
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -26,8 +28,24 @@ function Login() {
 
     try {
       const response = await login(formData.email, formData.password);
-      if (response.success) {
-        navigate('/dashboard');
+      console.log('LOGIN RESPONSE:', response);
+
+      if (response.success && response.token) {
+        const user = response.user || { id: response.id, name: response.name, role: response.role };
+        const role = (user.role || response.role || '').toString().toLowerCase();
+
+        localStorage.setItem('token', response.token);
+        localStorage.setItem('user', JSON.stringify(user));
+        localStorage.setItem('role', role);
+
+        if (role === 'admin') {
+          navigate('/project-dashboard');
+        } else if (role === 'agent') {
+          navigate('/agent-dashboard');
+        } else {
+          navigate('/dashboard');
+        }
+        return;
       }
     } catch (err) {
       setError(err.message || 'Login failed. Please try again.');
@@ -50,6 +68,11 @@ function Login() {
 
         {/* Login Form Card */}
         <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-8">
+          {showRegisteredMessage && (
+            <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+              <p className="text-green-700 text-sm">Account created successfully. Please sign in.</p>
+            </div>
+          )}
           {error && (
             <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
               <p className="text-red-600 text-sm">{error}</p>

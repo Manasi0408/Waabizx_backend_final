@@ -15,16 +15,26 @@ exports.initializeSocket = (server) => {
   io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
 
-    // Join user room
+    // Join user room (legacy inbox UI)
     socket.on('join-user', (userId) => {
       socket.join(`user-${userId}`);
-      console.log(`User ${userId} joined their room`);
+      console.log(`User ${userId} joined their room (user-${userId})`);
     });
 
-    // Join contact room for real-time chat
+    // Join contact room for real-time chat (legacy contact-based rooms)
     socket.on('join-contact', (contactId) => {
       socket.join(`contact-${contactId}`);
-      console.log(`Socket ${socket.id} joined contact room: ${contactId}`);
+      console.log(`Socket ${socket.id} joined contact room: contact-${contactId}`);
+    });
+
+    // Generic room join – used for AiSensy-style agent/manager rooms
+    // Examples:
+    //   socket.emit("join", `agent_${agentId}`);
+    //   socket.emit("join", "manager");
+    socket.on('join', (room) => {
+      if (!room) return;
+      socket.join(room);
+      console.log(`Socket ${socket.id} joined room: ${room}`);
     });
 
     // Leave contact room
@@ -84,6 +94,20 @@ exports.emitToContact = (contactId, event, data) => {
 exports.emitToAll = (event, data) => {
   if (io) {
     io.emit(event, data);
+  }
+};
+
+// Emit to specific agent room (AiSensy Live Chat)
+exports.emitToAgent = (agentId, event, data) => {
+  if (io && agentId != null) {
+    io.to(`agent_${agentId}`).emit(event, data);
+  }
+};
+
+// Emit to manager room (requesting queue)
+exports.emitToManager = (event, data) => {
+  if (io) {
+    io.to("manager").emit(event, data);
   }
 };
 

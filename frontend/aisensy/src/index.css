@@ -44,3 +44,16 @@ code {
 .animate-fade-in {
   animation: fade-in 0.3s ease-out;
 }
+
+/* Scroll without showing a track (main app teal sidebar nav) */
+@layer utilities {
+  .scrollbar-sidebar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-sidebar-none::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}

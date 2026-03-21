@@ -24,12 +24,29 @@ const messageRoutes = require('./routes/messageRoutes');
 const contactManagementRoutes = require('./routes/contactManagementRoutes');
 const mediaRoutes = require('./routes/mediaRoutes');
 const chatbotRoutes = require('./routes/chatbotRoutes');
+const projectRoutes = require('./routes/projectRoutes');
+const agentRoutes = require('./modules/agentDashboard/agentRoutes');
+const agentChatRoutes = require('./routes/agentChatRoutes');
+const chatRoutes = require('./routes/chatRoutes');
+const managerAgentRoutes = require('./routes/managerAgentRoutes');
+const adminAgentMessagesRoutes = require('./routes/adminAgentMessagesRoutes');
+const paymentRoutes = require('./routes/paymentRoutes');
+const cannedMessageRoutes = require('./routes/cannedMessageRoutes');
 
 // Initialize Express app
 const app = express();
 
-// CORS middleware - MUST be first
-app.use(cors());
+// CORS middleware - MUST be first (allow frontend on localhost and common origins when backend is behind ngrok)
+const corsOptions = {
+  origin: [
+    'http://localhost:3000',
+    process.env.FRONTEND_URL || ''
+  ].filter(Boolean),
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+if (corsOptions.origin.length === 0) corsOptions.origin = true;
+app.use(cors(corsOptions));
 
 // Body parser middleware - MUST be before routes
 app.use(express.json({ 
@@ -93,12 +110,14 @@ app.use('/meta', metaRoutes);
 
 // API routes
 app.use('/api/auth', authRoutes);
+app.use('/api', adminAgentMessagesRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/broadcast', broadcastRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/contact-management', contactManagementRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/templates', templateRoutes);
+app.use('/api/canned-messages', cannedMessageRoutes);
 app.use("/api/settings", settingRoutes);
 // Webhook endpoint - single clean route
 app.use('/webhook', metaWebhookRoutes);
@@ -110,6 +129,12 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/contact-management', contactManagementRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/chatbot', chatbotRoutes);
+app.use('/api/projects', projectRoutes);
+app.use('/api', agentRoutes);
+app.use('/api/agent/chat', agentChatRoutes);
+app.use('/api/chat', chatRoutes);
+app.use('/api', managerAgentRoutes);
+app.use('/api/payments', paymentRoutes);
 
 // Serve React build (static files + SPA fallback)
 app.use(express.static(path.join(__dirname, 'build')));

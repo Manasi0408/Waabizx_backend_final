@@ -5,6 +5,27 @@ const getToken = () => {
   return localStorage.getItem('token');
 };
 
+const normalizeErrorMessage = (data, fallback) => {
+  if (!data) return fallback;
+  if (typeof data === 'string') return data;
+  // common backend shapes
+  if (typeof data.message === 'string' && data.message.trim()) return data.message;
+  if (typeof data.error === 'string' && data.error.trim()) return data.error;
+  if (data.error && typeof data.error === 'object') {
+    if (typeof data.error.message === 'string' && data.error.message.trim()) return data.error.message;
+    try {
+      return JSON.stringify(data.error);
+    } catch (e) {
+      return fallback;
+    }
+  }
+  try {
+    return JSON.stringify(data);
+  } catch (e) {
+    return fallback;
+  }
+};
+
 // Create template
 export const createTemplate = async (templateData) => {
   try {
@@ -190,17 +211,22 @@ export const createMetaTemplate = async (templateData) => {
       body: JSON.stringify(templateData)
     });
 
-    const data = await response.json();
+    let data;
+    try {
+      data = await response.json();
+    } catch (e) {
+      data = null;
+    }
 
     if (!response.ok) {
-      throw new Error(data.error || data.message || 'Failed to create template');
+      throw new Error(normalizeErrorMessage(data, 'Failed to submit template to Meta'));
     }
 
     if (data.success) {
       return data;
     }
 
-    throw new Error(data.message || 'Failed to create template');
+    throw new Error(normalizeErrorMessage(data, 'Failed to submit template to Meta'));
   } catch (error) {
     throw error;
   }
@@ -225,11 +251,13 @@ export const getMetaTemplates = async () => {
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(data.error || data.message || 'Failed to fetch templates from Meta');
+      const errMsg = typeof data.error === 'string' ? data.error
+        : (data.error?.error?.message || data.error?.message || data.message || 'Failed to fetch templates from Meta');
+      throw new Error(errMsg);
     }
 
     if (data.success) {
-      return data.templates || [];
+      return Array.isArray(data.templates) ? data.templates : [];
     }
 
     throw new Error(data.message || 'Failed to fetch templates from Meta');

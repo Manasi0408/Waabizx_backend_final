@@ -11,11 +11,11 @@ import {
   createMetaTemplate,
   getMetaTemplates
 } from '../services/templateService';
+import MainSidebarNav from '../components/MainSidebarNav';
 
 function Templates() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [notificationDropdownOpen, setNotificationDropdownOpen] = useState(false);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -29,6 +29,7 @@ function Templates() {
   const [showCreateMetaModal, setShowCreateMetaModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showRejectionModal, setShowRejectionModal] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [metaTemplates, setMetaTemplates] = useState([]);
   const [loadingMetaTemplates, setLoadingMetaTemplates] = useState(false);
@@ -36,7 +37,6 @@ function Templates() {
     name: '',
     content: '',
     category: 'other',
-    status: 'draft',
     variables: []
   });
   const [metaFormData, setMetaFormData] = useState({
@@ -50,7 +50,6 @@ function Templates() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const dropdownRef = useRef(null);
   const notificationRef = useRef(null);
 
   // Fetch user profile
@@ -133,9 +132,6 @@ function Templates() {
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setProfileDropdownOpen(false);
-      }
       if (notificationRef.current && !notificationRef.current.contains(event.target)) {
         setNotificationDropdownOpen(false);
       }
@@ -143,11 +139,6 @@ function Templates() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
 
   const handleNotificationClick = async (notification) => {
     if (!notification.is_read) {
@@ -197,11 +188,12 @@ function Templates() {
       const template = await createTemplate(formData);
       setSuccess('Template created successfully!');
       setShowCreateModal(false);
-      setFormData({ name: '', content: '', category: 'other', status: 'draft', variables: [] });
+      setFormData({ name: '', content: '', category: 'other', variables: [] });
       fetchTemplates();
       setTimeout(() => setSuccess(''), 3000);
     } catch (error) {
-      setError(error.message || 'Failed to create template');
+      const msg = error?.message;
+      setError(typeof msg === 'string' && msg !== '[object Object]' ? msg : 'Failed to submit template to Meta');
     } finally {
       setSaving(false);
     }
@@ -242,13 +234,15 @@ function Templates() {
 
   const handleFetchMetaTemplates = async () => {
     try {
+      setError('');
       setLoadingMetaTemplates(true);
       const templates = await getMetaTemplates();
-      setMetaTemplates(templates);
-      setSuccess(`Fetched ${templates.length} templates from Meta`);
+      setMetaTemplates(Array.isArray(templates) ? templates : []);
+      setSuccess(`Fetched ${Array.isArray(templates) ? templates.length : 0} templates from Meta`);
       setTimeout(() => setSuccess(''), 3000);
-    } catch (error) {
-      setError(error.message || 'Failed to fetch templates from Meta');
+    } catch (err) {
+      const msg = err?.message;
+      setError(typeof msg === 'string' && msg !== '[object Object]' ? msg : 'Failed to fetch templates from Meta');
     } finally {
       setLoadingMetaTemplates(false);
     }
@@ -261,7 +255,24 @@ function Templates() {
     setSaving(true);
 
     try {
-      const result = await createMetaTemplate(metaFormData);
+      const normalizedName = String(metaFormData.name || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '_')
+        .replace(/[^a-z0-9_]/g, '');
+      if (!normalizedName) {
+        throw new Error('Template name invalid. Use letters/numbers/underscores only (Meta requirement).');
+      }
+      const normalizedComponents = (metaFormData.components || []).map(c => ({
+        ...c,
+        type: String(c.type || '').toUpperCase()
+      }));
+
+      const result = await createMetaTemplate({
+        ...metaFormData,
+        name: normalizedName,
+        components: normalizedComponents
+      });
       setSuccess(`Template submitted to Meta! Status: ${result.status}`);
       setShowCreateMetaModal(false);
       setMetaFormData({
@@ -287,7 +298,6 @@ function Templates() {
         name: fullTemplate.name || '',
         content: fullTemplate.content || '',
         category: fullTemplate.category || 'other',
-        status: fullTemplate.status || 'draft',
         variables: fullTemplate.variables || []
       });
       setShowEditModal(true);
@@ -296,14 +306,31 @@ function Templates() {
     }
   };
 
-  const getStatusColor = (status) => {
-    const statusUpper = status?.toUpperCase();
+  const normalizeStatusLabel = (status) => {
+    const s = String(status || '').trim();
+    if (!s) return 'Unknown';
+    const upper = s.toUpperCase();
+    if (upper === 'APPROVED') return 'Approved';
+    if (upper === 'REJECTED') return 'Rejected';
+    if (upper === 'PENDING') return 'Pending';
+    if (upper === 'DRAFT') return 'Draft';
+    // fallback: Title Case first letter only
+    return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+  };
+
+  const getStatusPillClass = (status) => {
+    const statusUpper = String(status || '').toUpperCase();
     switch (statusUpper) {
-      case 'APPROVED': return 'bg-green-100 text-green-800';
-      case 'REJECTED': return 'bg-red-100 text-red-800';
-      case 'PENDING': return 'bg-yellow-100 text-yellow-800';
-      case 'DRAFT': return 'bg-gray-100 text-gray-800';
-      default: return 'bg-gray-100 text-gray-800';
+      case 'APPROVED':
+        return 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200';
+      case 'REJECTED':
+        return 'bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200';
+      case 'PENDING':
+        return 'bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200';
+      case 'DRAFT':
+        return 'bg-slate-50 text-slate-700 ring-1 ring-inset ring-slate-200';
+      default:
+        return 'bg-slate-50 text-slate-700 ring-1 ring-inset ring-slate-200';
     }
   };
 
@@ -312,6 +339,7 @@ function Templates() {
       case 'welcome': return 'Welcome';
       case 'promotional': return 'Promotional';
       case 'marketing': return 'Marketing';
+      case 'utility': return 'Utility';
       case 'transactional': return 'Transactional';
       case 'notification': return 'Notification';
       case 'other': return 'Other';
@@ -334,9 +362,9 @@ function Templates() {
   const userInitial = userName.charAt(0).toUpperCase();
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
       {/* Top Navigation Bar */}
-      <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-4 flex justify-between items-center shadow-sm">
+      <header className="shrink-0 bg-white border-b border-gray-200 px-4 md:px-6 py-4 flex justify-between items-center shadow-sm">
         <div className="flex items-center gap-4">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -489,136 +517,24 @@ function Templates() {
             )}
           </div>
           
-          {/* User Profile */}
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
-              className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center cursor-pointer hover:ring-2 ring-blue-300 transition focus:outline-none"
-            >
-              <span className="text-white font-semibold text-sm">{userInitial}</span>
-            </button>
-
-            {profileDropdownOpen && (
-              <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-xl border border-gray-200 py-2 z-50">
-                <div className="px-4 py-3 border-b border-gray-200">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center flex-shrink-0">
-                      <span className="text-white font-semibold text-sm">{userInitial}</span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-800 truncate">{userName}</p>
-                      <p className="text-xs text-gray-500 truncate">{user?.email}</p>
-                    </div>
-                  </div>
-                </div>
-                <Link
-                  to="/settings"
-                  onClick={() => setProfileDropdownOpen(false)}
-                  className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition block"
-                >
-                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  <span>Settings</span>
-                </Link>
-                <button
-                  onClick={handleLogout}
-                  className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-3 transition"
-                >
-                  <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                  </svg>
-                  <span>Logout</span>
-                </button>
-              </div>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/settings')}
+            className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center cursor-pointer hover:ring-2 ring-blue-300 transition focus:outline-none"
+          >
+            <span className="text-white font-semibold text-sm">{userInitial}</span>
+          </button>
         </div>
       </header>
 
-      <div className="flex">
+      <div className="flex flex-1 min-h-0">
         {/* Sidebar */}
-        <aside className={`${sidebarOpen ? 'w-64' : 'w-0'} bg-white border-r border-gray-200 min-h-[calc(100vh-73px)] transition-all duration-300 overflow-hidden`}>
-          <nav className="p-4 space-y-1">
-            <Link
-              to="/dashboard"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Dashboard</span>
-            </Link>
-            <Link
-              to="/campaigns"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Campaigns</span>
-            </Link>
-            <Link
-              to="/broadcast"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Broadcast</span>
-            </Link>
-            <Link
-              to="/templates"
-              className="flex items-center gap-3 px-4 py-3 bg-blue-50 text-blue-600 font-medium rounded-lg"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Templates</span>
-            </Link>
-            <Link
-              to="/contacts"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Contacts</span>
-            </Link>
-            <Link
-              to="/inbox"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Inbox</span>
-            </Link>
-            <Link
-              to="/analytics"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Analytics</span>
-            </Link>
-            <Link
-              to="/settings"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Settings</span>
-            </Link>
-          </nav>
+        <aside className={`bg-teal-900 text-white border-r border-teal-800 h-full shrink-0 flex flex-col overflow-hidden transition-all duration-300 ${sidebarOpen ? 'w-20' : 'w-0 md:w-20'}`}>
+          <MainSidebarNav />
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 p-6 md:p-8">
+        <main className="flex-1 min-h-0 overflow-y-auto p-6 md:p-8">
           {/* Success/Error Messages */}
           {success && (
             <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
@@ -659,7 +575,7 @@ function Templates() {
               </button>
               <button
                 onClick={() => {
-                  setFormData({ name: '', content: '', category: 'other', status: 'draft', variables: [] });
+                  setFormData({ name: '', content: '', category: 'other', variables: [] });
                   setShowCreateModal(true);
                   setError('');
                 }}
@@ -705,6 +621,7 @@ function Templates() {
                   <option value="welcome">Welcome</option>
                   <option value="promotional">Promotional</option>
                   <option value="marketing">Marketing</option>
+                  <option value="utility">Utility</option>
                   <option value="transactional">Transactional</option>
                   <option value="notification">Notification</option>
                   <option value="other">Other</option>
@@ -776,13 +693,37 @@ function Templates() {
                             <span className="text-sm text-gray-700">{getCategoryLabel(template.category)}</span>
                           </td>
                           <td className="px-6 py-4">
-                            <div className="flex flex-col gap-1">
-                              <span className={`px-3 py-1 text-xs font-semibold rounded-full ${getStatusColor(template.status)}`}>
-                                {template.status}
-                              </span>
-                              {template.metaStatus && (
-                                <span className={`px-2 py-0.5 text-xs font-medium rounded ${getStatusColor(template.metaStatus)}`}>
-                                  Meta: {template.metaStatus}
+                            <div className="flex flex-col gap-2">
+                              {template.metaStatus ? (
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className={`inline-flex items-center gap-1.5 w-fit px-2.5 py-1 text-[11px] font-semibold rounded-full ${getStatusPillClass(template.metaStatus)}`}
+                                  >
+                                    <span className="text-gray-500 font-medium">Meta</span>
+                                    <span className="opacity-80">•</span>
+                                    <span>{normalizeStatusLabel(template.metaStatus)}</span>
+                                  </span>
+                                  {(String(template.metaStatus || '').toUpperCase() === 'REJECTED' || String(template.status || '').toLowerCase() === 'rejected') && (
+                                    <button
+                                      type="button"
+                                      title="View rejection reason"
+                                      onClick={() => {
+                                        setSelectedTemplate(template);
+                                        setShowRejectionModal(true);
+                                      }}
+                                      className="inline-flex items-center justify-center w-7 h-7 rounded-full hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition"
+                                    >
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                      </svg>
+                                    </button>
+                                  )}
+                                </div>
+                              ) : (
+                                <span
+                                  className={`inline-flex items-center w-fit px-3 py-1 text-xs font-semibold rounded-full ${getStatusPillClass(template.status)}`}
+                                >
+                                  {normalizeStatusLabel(template.status)}
                                 </span>
                               )}
                             </div>
@@ -864,7 +805,7 @@ function Templates() {
                 <button
                   onClick={() => {
                     setShowCreateModal(false);
-                    setFormData({ name: '', content: '', category: 'other', status: 'draft', variables: [] });
+                    setFormData({ name: '', content: '', category: 'other', variables: [] });
                     setError('');
                   }}
                   className="text-gray-400 hover:text-gray-600"
@@ -899,23 +840,16 @@ function Templates() {
                     <option value="welcome">Welcome</option>
                     <option value="promotional">Promotional</option>
                     <option value="marketing">Marketing</option>
+                    <option value="utility">Utility</option>
                     <option value="transactional">Transactional</option>
                     <option value="notification">Notification</option>
                     <option value="other">Other</option>
                   </select>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Status *</label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                    required
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                  >
-                    <option value="draft">Draft</option>
-                    <option value="approved">Approved</option>
-                    <option value="rejected">Rejected</option>
-                  </select>
+                <div className="flex items-center">
+                  <p className="text-xs text-gray-500">
+                    Status is controlled by Meta approval (Create Local starts as <b>draft</b>).
+                  </p>
                 </div>
               </div>
               <div>
@@ -935,7 +869,7 @@ function Templates() {
                   type="button"
                   onClick={() => {
                     setShowCreateModal(false);
-                    setFormData({ name: '', content: '', category: 'other', status: 'draft', variables: [] });
+                    setFormData({ name: '', content: '', category: 'other', variables: [] });
                     setError('');
                   }}
                   className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50 transition"
@@ -966,7 +900,7 @@ function Templates() {
                   onClick={() => {
                     setShowEditModal(false);
                     setSelectedTemplate(null);
-                    setFormData({ name: '', content: '', category: 'other', status: 'draft', variables: [] });
+                    setFormData({ name: '', content: '', category: 'other', variables: [] });
                     setError('');
                   }}
                   className="text-gray-400 hover:text-gray-600"
@@ -1000,23 +934,16 @@ function Templates() {
                     <option value="welcome">Welcome</option>
                     <option value="promotional">Promotional</option>
                     <option value="marketing">Marketing</option>
+                    <option value="utility">Utility</option>
                     <option value="transactional">Transactional</option>
                     <option value="notification">Notification</option>
                     <option value="other">Other</option>
                   </select>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Status *</label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                    required
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                  >
-                    <option value="draft">Draft</option>
-                    <option value="approved">Approved</option>
-                    <option value="rejected">Rejected</option>
-                  </select>
+                <div className="flex items-center">
+                  <p className="text-xs text-gray-500">
+                    Status is controlled by Meta approval (manual changes disabled).
+                  </p>
                 </div>
               </div>
               <div>
@@ -1036,7 +963,7 @@ function Templates() {
                   onClick={() => {
                     setShowEditModal(false);
                     setSelectedTemplate(null);
-                    setFormData({ name: '', content: '', category: 'other', status: 'draft', variables: [] });
+                    setFormData({ name: '', content: '', category: 'other', variables: [] });
                     setError('');
                   }}
                   className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50 transition"
@@ -1052,6 +979,58 @@ function Templates() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Rejection Reason Modal */}
+      {showRejectionModal && selectedTemplate && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full">
+            <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-gray-800">Template Rejection Reason</h3>
+              <button
+                onClick={() => {
+                  setShowRejectionModal(false);
+                  setSelectedTemplate(null);
+                }}
+                className="text-gray-400 hover:text-gray-600 transition"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <p className="text-sm font-semibold text-gray-700 mb-1">Template</p>
+                <p className="text-sm text-gray-900">{selectedTemplate.name}</p>
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-700 mb-1">Reason</p>
+                <p className="text-sm text-gray-800 whitespace-pre-wrap">
+                  {selectedTemplate.rejectionReason || selectedTemplate.rejectionInfo || 'Meta did not provide a reason yet. Wait a bit and click “Sync from Meta” again.'}
+                </p>
+              </div>
+              {selectedTemplate.rejectionRecommendation && (
+                <div>
+                  <p className="text-sm font-semibold text-gray-700 mb-1">Recommendation</p>
+                  <p className="text-sm text-gray-800 whitespace-pre-wrap">{selectedTemplate.rejectionRecommendation}</p>
+                </div>
+              )}
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRejectionModal(false);
+                    setSelectedTemplate(null);
+                  }}
+                  className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1155,6 +1134,7 @@ function Templates() {
                   <option value="fr_FR">French</option>
                   <option value="de_DE">German</option>
                   <option value="hi_IN">Hindi</option>
+                  <option value="mr_IN">Marathi</option>
                 </select>
               </div>
               <div>

@@ -1,7 +1,8 @@
 require('dotenv').config();
-const { WebhookLog, MetaMessage, Contact, Message, InboxMessage, User, WhatsAppAccount } = require('../models');
+const { WebhookLog, MetaMessage, Contact, Message, InboxMessage, User, WhatsAppAccount, CampaignAudience, Template } = require('../models');
 const { Op } = require('sequelize');
 const socketService = require('../services/socketService');
+const db = require('../config/db'); // MySQL pool for conversations/agent routing
 
 // VERIFY WEBHOOK (for WhatsApp/Meta webhook verification)
 exports.verifyWebhook = (req, res) => {
@@ -64,14 +65,89 @@ exports.handleWebhook = async (req, res) => {
       console.log('Message received for WABA:', wabaId, clientId != null ? `(client_id: ${clientId})` : '(no client mapped)');
     }
 
-    // 🔹 2. Handle Meta/WhatsApp webhook format (entry.changes.value format)
-    const entry = payload.entry?.[0]?.changes?.[0]?.value;
-    const messageObj = entry?.messages?.[0];
+    // 🔹 2. Handle Meta webhook changes (template status + message status)
+    // Wrap properly across all entries/changes (Meta can send multiple entries/changes)
+    const entries = payload.entry || [];
+    let firstValue = null; // keep for message handling compatibility below
+
+    for (const entry of entries) {
+      const changes = entry?.changes || [];
+
+      for (const change of changes) {
+        if (!firstValue && change?.value) firstValue = change.value;
+
+        // 🔹 2a. Template status updates (APPROVED / REJECTED / PENDING)
+        if (change?.field === 'message_template_status_update') {
+          const v = change.value;
+          if (!v?.message_template_name) continue;
+
+          const metaEvent = String(v.event || '').toUpperCase();
+          const templateName = String(v.message_template_name);
+
+          const metaTemplateId = v.message_template_id != null ? String(v.message_template_id) : null;
+          const reason = v.reason != null ? String(v.reason) : null;
+          const rejectionInfoReason = v.rejection_info?.reason != null ? String(v.rejection_info.reason) : null;
+          const rejectionRecommendation = v.rejection_info?.recommendation != null ? String(v.rejection_info.recommendation) : null;
+
+          await Template.update(
+            {
+              status:
+                metaEvent === 'APPROVED'
+                  ? 'approved'
+                  : metaEvent === 'REJECTED'
+                  ? 'rejected'
+                  : 'draft',
+              metaTemplateId: metaTemplateId,
+              metaStatus: metaEvent,
+              rejectionReason: metaEvent === 'REJECTED' ? (reason || '') : null,
+              rejectionInfo: metaEvent === 'REJECTED' ? rejectionInfoReason : null,
+              rejectionRecommendation: metaEvent === 'REJECTED' ? rejectionRecommendation : null
+            },
+            { where: { name: templateName } }
+          );
+        }
+
+        // 🔹 2b. Message status updates (sent/delivered/read)
+        // field: "messages"
+        const statuses = change?.value?.statuses;
+        if (statuses && Array.isArray(statuses)) {
+          for (const st of statuses) {
+            const waMessageId = st.id;
+            const metaStatus = (st.status || '').toLowerCase();
+            if (!waMessageId || !['sent', 'delivered', 'read'].includes(metaStatus)) continue;
+            try {
+              const audience = await CampaignAudience.findOne({
+                where: { waMessageId }
+              });
+              if (audience) {
+                const updateData = { status: metaStatus };
+                if (metaStatus === 'delivered') updateData.deliveredAt = new Date(parseInt(st.timestamp, 10) * 1000 || Date.now());
+                if (metaStatus === 'read') updateData.readAt = new Date(parseInt(st.timestamp, 10) * 1000 || Date.now());
+                await audience.update(updateData);
+              }
+              const inboxMsg = await InboxMessage.findOne({
+                where: { waMessageId }
+              });
+              if (inboxMsg) {
+                await inboxMsg.update({ status: metaStatus });
+              }
+            } catch (e) {
+              console.error('Error updating campaign status for', waMessageId, e.message);
+            }
+          }
+        }
+      }
+    }
+
+    // 🔹 3. Handle Meta/WhatsApp webhook format (entry.changes.value format) — incoming messages
+    // For Cloud API, `changes[].value` contains `messages`, `contacts`, etc.
+    const valueEntry = firstValue || {};
+    const messageObj = valueEntry?.messages?.[0];
     
     if (messageObj) {
       console.log('\n📱 Processing Meta/WhatsApp format webhook');
       // Meta/WhatsApp format
-      const waId = entry?.contacts?.[0]?.wa_id;
+      const waId = valueEntry?.contacts?.[0]?.wa_id;
       const fromNumber = messageObj.from;
       const text = messageObj.text?.body || 'Non-text message';
       const timestamp = new Date(messageObj.timestamp * 1000);
@@ -191,7 +267,33 @@ exports.handleWebhook = async (req, res) => {
           });
           console.log('✅ Contact lastContacted updated to:', timestamp.toISOString());
 
-          // Emit real-time update
+          // Sync to live-chat (conversations + message) so /live-chat and /inbox both show customer messages
+          try {
+            const [convRows] = await db.query(
+              "SELECT id FROM conversations WHERE phone = ? AND status != 'closed'",
+              [fromNumber]
+            );
+            let convId;
+            if (convRows && convRows.length > 0) {
+              convId = convRows[0].id;
+            } else {
+              const [ins] = await db.query(
+                "INSERT INTO conversations (phone, last_message, status) VALUES (?, ?, 'requesting')",
+                [fromNumber, text]
+              );
+              convId = ins.insertId;
+            }
+            await db.query(
+              "INSERT INTO message (conversation_id, sender, message, created_at) VALUES (?, 'customer', ?, ?)",
+              [convId, text, timestamp]
+            );
+            await db.query("UPDATE conversations SET last_message = ? WHERE id = ?", [text, convId]);
+            console.log('✅ Synced incoming message to live-chat (conversation id:', convId + ')');
+          } catch (syncErr) {
+            console.error('Error syncing to live-chat:', syncErr);
+          }
+
+          // Emit real-time update (AiSensy-style routing)
           console.log('\n📡 Emitting Socket.IO events...');
           // Use InboxMessage ID if available, otherwise fall back to Message ID
           const messageId = inboxMessage?.id || newMessage.id;
@@ -206,17 +308,51 @@ exports.handleWebhook = async (req, res) => {
             deliveredAt: timestamp.toISOString(),
             createdAt: newMessage.createdAt ? newMessage.createdAt.toISOString() : timestamp.toISOString()
           };
-          
-          socketService.emitToContact(contact.id, 'new-message', messageData);
-          console.log('   ✅ Emitted: new-message to contact', contact.id, 'Message ID:', messageId);
-          
-          socketService.emitToUser(userId, 'inbox-update', {
-            contactId: contact.id,
-            lastMessage: text,
-            lastMessageTime: timestamp
-          });
-          console.log('   ✅ Emitted: inbox-update to user', userId);
-          
+
+          // 1️⃣ Look up latest open conversation for this phone to find agent_id
+          let agentId = null;
+          let conversationId = null;
+          try {
+            const [rows] = await db.query(
+              `SELECT id, agent_id
+               FROM conversations
+               WHERE phone = ? AND status != 'closed'
+               ORDER BY id DESC
+               LIMIT 1`,
+              [fromNumber]
+            );
+            if (rows && rows.length > 0) {
+              conversationId = rows[0].id;
+              agentId = rows[0].agent_id;
+            }
+          } catch (convErr) {
+            console.error('Error fetching conversation for routing (Meta format):', convErr);
+          }
+
+          const agentMessagePayload = {
+            conversation_id: conversationId,
+            phone: fromNumber,
+            message: text,
+            direction: 'inbound',
+            sender: 'customer',
+            created_at: timestamp.toISOString()
+          };
+
+          if (agentId) {
+            // 2️⃣ Route to assigned agent live chat
+            socketService.emitToAgent(agentId, 'new-message', agentMessagePayload);
+            console.log(`   ✅ Emitted: new-message to agent_${agentId} (conversation ${conversationId || 'N/A'})`);
+          } else {
+            // 3️⃣ No agent assigned → send to manager requesting queue
+            socketService.emitToManager('inbox-update', {
+              contactId: contact.id,
+              phone: fromNumber,
+              lastMessage: text,
+              lastMessageTime: timestamp
+            });
+            console.log('   ✅ Emitted: inbox-update to manager (no agent assigned)');
+          }
+
           console.log('\n✅ All processing complete for Meta/WhatsApp format');
           console.log('========================================\n');
       }
@@ -342,32 +478,80 @@ exports.handleWebhook = async (req, res) => {
           });
           console.log('✅ Contact lastContacted updated to:', new Date().toISOString());
 
-          // 🔹 6. Emit real-time update via Socket.IO
+          // Sync to live-chat (conversations + message) so /live-chat and /inbox both show customer messages
+          let conversationId = null;
+          try {
+            const [convRows] = await db.query(
+              "SELECT id FROM conversations WHERE phone = ? AND status != 'closed'",
+              [phone]
+            );
+            if (convRows && convRows.length > 0) {
+              conversationId = convRows[0].id;
+            } else {
+              const [ins] = await db.query(
+                "INSERT INTO conversations (phone, last_message, status) VALUES (?, ?, 'requesting')",
+                [phone, text]
+              );
+              conversationId = ins.insertId;
+            }
+            await db.query(
+              "INSERT INTO message (conversation_id, sender, message) VALUES (?, 'customer', ?)",
+              [conversationId, text]
+            );
+            await db.query("UPDATE conversations SET last_message = ? WHERE id = ?", [text, conversationId]);
+            console.log('✅ Synced incoming message to live-chat (conversation id:', conversationId + ')');
+          } catch (syncErr) {
+            console.error('Error syncing to live-chat:', syncErr);
+          }
+
+          // 🔹 6. Emit real-time update via Socket.IO (AiSensy-style routing)
           console.log('\n📡 Emitting Socket.IO events...');
           // Use InboxMessage ID if available, otherwise fall back to Message ID
           const messageId = inboxMessage?.id || newMessage.id;
-          const messageData = {
-            id: messageId,
-            contactId: contact.id,
-            phone: fromNumber, // Include phone for frontend matching
-            content: text,
-            type: 'incoming',
-            status: 'delivered',
-            sentAt: newMessage.sentAt ? newMessage.sentAt.toISOString() : timestamp.toISOString(),
-            deliveredAt: newMessage.deliveredAt ? newMessage.deliveredAt.toISOString() : timestamp.toISOString(),
-            createdAt: newMessage.createdAt ? newMessage.createdAt.toISOString() : timestamp.toISOString()
+
+          // 1️⃣ Look up latest open conversation for this phone to find agent_id
+          let agentId = null;
+          try {
+            const [rows] = await db.query(
+              `SELECT id, agent_id
+               FROM conversations
+               WHERE phone = ? AND status != 'closed'
+               ORDER BY id DESC
+               LIMIT 1`,
+              [phone]
+            );
+            if (rows && rows.length > 0) {
+              conversationId = conversationId || rows[0].id;
+              agentId = rows[0].agent_id;
+            }
+          } catch (convErr) {
+            console.error('Error fetching conversation for routing (AiSensy format):', convErr);
+          }
+
+          const agentMessagePayload = {
+            conversation_id: conversationId,
+            phone,
+            message: text,
+            direction: 'inbound',
+            sender: 'customer',
+            created_at: newMessage.sentAt ? newMessage.sentAt.toISOString() : new Date().toISOString()
           };
-          
-          socketService.emitToContact(contact.id, 'new-message', messageData);
-          console.log('   ✅ Emitted: new-message to contact', contact.id, 'Message ID:', messageId);
-          
-          socketService.emitToUser(userId, 'inbox-update', {
-            contactId: contact.id,
-            lastMessage: text,
-            lastMessageTime: timestamp
-          });
-          console.log('   ✅ Emitted: inbox-update to user', userId);
-          
+
+          if (agentId) {
+            // 2️⃣ Route to assigned agent live chat
+            socketService.emitToAgent(agentId, 'new-message', agentMessagePayload);
+            console.log(`   ✅ Emitted: new-message to agent_${agentId} (conversation ${conversationId || 'N/A'})`);
+          } else {
+            // 3️⃣ No agent assigned → send to manager requesting queue
+            socketService.emitToManager('inbox-update', {
+              contactId: contact.id,
+              phone,
+              lastMessage: text,
+              lastMessageTime: newMessage.sentAt || new Date()
+            });
+            console.log('   ✅ Emitted: inbox-update to manager (no agent assigned)');
+          }
+
           console.log('\n✅ All processing complete for AiSensy format');
           console.log('========================================\n');
       }

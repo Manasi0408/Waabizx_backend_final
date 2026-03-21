@@ -60,6 +60,16 @@ exports.protect = async (req, res, next) => {
       });
     }
 
+    // Enforce single active session per user:
+    // token must carry sid and it must match the latest stored on the user
+    if (!decoded.sid || !req.user.currentSessionId || decoded.sid !== req.user.currentSessionId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Session expired (logged in elsewhere). Please login again.',
+        error: 'SessionInvalidated'
+      });
+    }
+
     next();
   } catch (error) {
     console.error('Auth middleware error:', error);

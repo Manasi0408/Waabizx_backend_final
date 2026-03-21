@@ -13,11 +13,13 @@ import {
   getCampaignById,
   getCampaignAudience
 } from '../services/campaignService';
+import MainSidebarNav from '../components/MainSidebarNav';
+import { uploadCSV } from '../services/broadcastService';
+// Campaign creation now uses parse-only CSV upload (no heavy contact loading)
 
 function Campaigns() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [notificationDropdownOpen, setNotificationDropdownOpen] = useState(false);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -46,8 +48,11 @@ function Campaigns() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const dropdownRef = useRef(null);
+  const [loadingCSV, setLoadingCSV] = useState(false);
+  // uploadContactsResult removed (no contacts upload in campaign modal)
   const notificationRef = useRef(null);
+  const csvInputRef = useRef(null);
+  // contactsCsvInputRef removed
 
   // Fetch user profile
   useEffect(() => {
@@ -130,9 +135,6 @@ function Campaigns() {
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setProfileDropdownOpen(false);
-      }
       if (notificationRef.current && !notificationRef.current.contains(event.target)) {
         setNotificationDropdownOpen(false);
       }
@@ -140,11 +142,6 @@ function Campaigns() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
 
   const handleNotificationClick = async (notification) => {
     if (!notification.is_read) {
@@ -183,6 +180,8 @@ function Campaigns() {
     return date.toLocaleDateString();
   };
 
+  // kept uploadContactsCSV import for other pages; campaign creation uses parse-only CSV upload
+
   // Campaign handlers
   const handleCreateCampaign = async (e) => {
     e.preventDefault();
@@ -191,10 +190,9 @@ function Campaigns() {
     setSaving(true);
 
     try {
-      // Validate audience
       const validAudience = formData.audience.filter(a => a.phone && a.phone.trim() !== '');
       if (validAudience.length === 0) {
-        setError('Please add at least one audience member with a phone number');
+        setError('Upload CSV (or add at least one row manually) to create a campaign.');
         setSaving(false);
         return;
       }
@@ -215,12 +213,12 @@ function Campaigns() {
       });
       setSuccess('Campaign created successfully!');
       setShowCreateModal(false);
-      setFormData({ 
-        name: '', 
-        template_name: '', 
-        template_language: 'en_US', 
+      setFormData({
+        name: '',
+        template_name: '',
+        template_language: 'en_US',
         schedule_time: null,
-        audience: [{ phone: '', var1: '', var2: '', var3: '', var4: '', var5: '' }] 
+        audience: [{ phone: '', var1: '', var2: '', var3: '', var4: '', var5: '' }]
       });
       fetchCampaigns();
       setTimeout(() => setSuccess(''), 3000);
@@ -238,7 +236,12 @@ function Campaigns() {
     setSaving(true);
 
     try {
-      await updateCampaign(selectedCampaign.id, formData);
+      await updateCampaign(selectedCampaign.id, {
+        name: formData.name,
+        template_name: formData.template_name,
+        template_language: formData.template_language,
+        schedule_time: formData.schedule_time || null
+      });
       setSuccess('Campaign updated successfully!');
       setShowEditModal(false);
       setSelectedCampaign(null);
@@ -363,6 +366,38 @@ function Campaigns() {
     setFormData({ ...formData, audience: newAudience });
   };
 
+  // Handle CSV upload for audience (same as Broadcast)
+  const handleCSVUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLoadingCSV(true);
+    setError('');
+    try {
+      const result = await uploadCSV(file);
+      const rows = result.data || [];
+      const columns = result.columns || [];
+      const phoneCol = columns.find(c => /phone/i.test(c)) || columns[0];
+      const varCols = columns.filter(c => c !== phoneCol);
+      const audience = rows.map(row => {
+        const member = {
+          phone: row.phone || row[phoneCol] || '',
+          var1: '', var2: '', var3: '', var4: '', var5: ''
+        };
+        varCols.slice(0, 5).forEach((col, i) => {
+          member[`var${i + 1}`] = row[col] != null ? String(row[col]) : '';
+        });
+        return member;
+      });
+      setFormData(prev => ({ ...prev, audience }));
+      setSuccess(`CSV uploaded: ${audience.length} recipients added`);
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      setError(err.message || 'Failed to upload CSV');
+    } finally {
+      setLoadingCSV(false);
+      e.target.value = '';
+    }
+  };
 
   const getStatusColor = (status) => {
     switch (status?.toUpperCase()) {
@@ -401,9 +436,9 @@ function Campaigns() {
   const userInitial = userName.charAt(0).toUpperCase();
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
       {/* Top Navigation Bar */}
-      <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-4 flex justify-between items-center shadow-sm">
+      <header className="shrink-0 bg-white border-b border-gray-200 px-4 md:px-6 py-4 flex justify-between items-center shadow-sm">
         <div className="flex items-center gap-4">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -556,136 +591,24 @@ function Campaigns() {
             )}
           </div>
           
-          {/* User Profile */}
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
-              className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center cursor-pointer hover:ring-2 ring-blue-300 transition focus:outline-none"
-            >
-              <span className="text-white font-semibold text-sm">{userInitial}</span>
-            </button>
-
-            {profileDropdownOpen && (
-              <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-xl border border-gray-200 py-2 z-50">
-                <div className="px-4 py-3 border-b border-gray-200">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center flex-shrink-0">
-                      <span className="text-white font-semibold text-sm">{userInitial}</span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-800 truncate">{userName}</p>
-                      <p className="text-xs text-gray-500 truncate">{user?.email}</p>
-                    </div>
-                  </div>
-                </div>
-                <Link
-                  to="/settings"
-                  onClick={() => setProfileDropdownOpen(false)}
-                  className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition block"
-                >
-                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  <span>Settings</span>
-                </Link>
-                <button
-                  onClick={handleLogout}
-                  className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-3 transition"
-                >
-                  <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                  </svg>
-                  <span>Logout</span>
-                </button>
-              </div>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/settings')}
+            className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center cursor-pointer hover:ring-2 ring-blue-300 transition focus:outline-none"
+          >
+            <span className="text-white font-semibold text-sm">{userInitial}</span>
+          </button>
         </div>
       </header>
 
-      <div className="flex">
+      <div className="flex flex-1 min-h-0">
         {/* Sidebar */}
-        <aside className={`${sidebarOpen ? 'w-64' : 'w-0'} bg-white border-r border-gray-200 min-h-[calc(100vh-73px)] transition-all duration-300 overflow-hidden`}>
-          <nav className="p-4 space-y-1">
-            <Link
-              to="/dashboard"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Dashboard</span>
-            </Link>
-            <Link
-              to="/campaigns"
-              className="flex items-center gap-3 px-4 py-3 bg-blue-50 text-blue-600 font-medium rounded-lg"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Campaigns</span>
-            </Link>
-            <Link
-              to="/broadcast"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Broadcast</span>
-            </Link>
-            <Link
-              to="/templates"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Templates</span>
-            </Link>
-            <Link
-              to="/contacts"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Contacts</span>
-            </Link>
-            <Link
-              to="/inbox"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Inbox</span>
-            </Link>
-            <Link
-              to="/analytics"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Analytics</span>
-            </Link>
-            <Link
-              to="/settings"
-              className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              <span className={sidebarOpen ? 'block' : 'hidden'}>Settings</span>
-            </Link>
-          </nav>
+        <aside className={`bg-teal-900 text-white border-r border-teal-800 h-full shrink-0 flex flex-col overflow-hidden transition-all duration-300 ${sidebarOpen ? 'w-20' : 'w-0 md:w-20'}`}>
+          <MainSidebarNav />
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 p-6 md:p-8">
+        <main className="flex-1 min-h-0 overflow-y-auto p-6 md:p-8">
           {/* Success/Error Messages */}
           {success && (
             <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
@@ -860,6 +783,26 @@ function Campaigns() {
                                 </button>
                               )}
                               <button
+                                onClick={() => {
+                                  setSelectedCampaign(campaign);
+                                  setFormData(prev => ({
+                                    ...prev,
+                                    name: campaign.name || '',
+                                    template_name: campaign.template_name || '',
+                                    template_language: campaign.template_language || 'en_US',
+                                    schedule_time: campaign.schedule_time || null
+                                  }));
+                                  setShowEditModal(true);
+                                  setError('');
+                                }}
+                                className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                                title="Edit Campaign"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </button>
+                              <button
                                 onClick={() => handleViewDetails(campaign)}
                                 className="p-2 text-gray-600 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition"
                                 title="View Details"
@@ -988,6 +931,7 @@ function Campaigns() {
                     <option value="fr_FR">French</option>
                     <option value="de_DE">German</option>
                     <option value="hi_IN">Hindi</option>
+                    <option value="mr_IN">Marathi</option>
                   </select>
                 </div>
               </div>
@@ -1001,84 +945,40 @@ function Campaigns() {
                 />
               </div>
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="block text-sm font-medium text-gray-700">Audience *</label>
-                  <button
-                    type="button"
-                    onClick={addAudienceMember}
-                    className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-                  >
-                    + Add Member
+                <label className="block text-sm font-medium text-gray-700 mb-2">Audience *</label>
+                <div className="flex items-center gap-2 mb-2">
+                  <input ref={csvInputRef} type="file" accept=".csv" onChange={handleCSVUpload} className="hidden" />
+                  <button type="button" onClick={() => csvInputRef.current?.click()} className="text-sm px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50 font-medium">
+                    Upload CSV
                   </button>
+                  <button type="button" onClick={addAudienceMember} className="text-sm text-blue-600 hover:text-blue-700 font-medium">+ Add Row</button>
                 </div>
+                {loadingCSV && <p className="text-sm text-gray-600 mb-2">Uploading CSV...</p>}
                 <div className="space-y-3 max-h-64 overflow-y-auto border border-gray-200 rounded-lg p-4">
                   {formData.audience.map((member, index) => (
                     <div key={index} className="bg-gray-50 p-3 rounded-lg">
                       <div className="flex items-start justify-between mb-2">
-                        <span className="text-xs font-medium text-gray-600">Member {index + 1}</span>
+                        <span className="text-xs font-medium text-gray-600">Row {index + 1}</span>
                         {formData.audience.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => removeAudienceMember(index)}
-                            className="text-xs text-red-600 hover:text-red-700"
-                          >
-                            Remove
-                          </button>
+                          <button type="button" onClick={() => removeAudienceMember(index)} className="text-xs text-red-600 hover:text-red-700">Remove</button>
                         )}
                       </div>
                       <div className="grid grid-cols-2 gap-2 mb-2">
-                        <input
-                          type="text"
-                          value={member.phone}
-                          onChange={(e) => updateAudienceMember(index, 'phone', e.target.value)}
-                          placeholder="Phone (e.g., 919876543210)"
-                          required
-                          className="px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm"
-                        />
-                        <input
-                          type="text"
-                          value={member.var1}
-                          onChange={(e) => updateAudienceMember(index, 'var1', e.target.value)}
-                          placeholder="Variable 1"
-                          className="px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm"
-                        />
+                        <input type="text" value={member.phone} onChange={(e) => updateAudienceMember(index, 'phone', e.target.value)} placeholder="Phone (e.g., 919876543210)" required className="px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
+                        <input type="text" value={member.var1} onChange={(e) => updateAudienceMember(index, 'var1', e.target.value)} placeholder="Var 1 ({{1}})" className="px-3 py-2 border border-gray-300 rounded text-sm" />
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <input
-                          type="text"
-                          value={member.var2}
-                          onChange={(e) => updateAudienceMember(index, 'var2', e.target.value)}
-                          placeholder="Variable 2"
-                          className="px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm"
-                        />
-                        <input
-                          type="text"
-                          value={member.var3}
-                          onChange={(e) => updateAudienceMember(index, 'var3', e.target.value)}
-                          placeholder="Variable 3"
-                          className="px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm"
-                        />
+                        <input type="text" value={member.var2} onChange={(e) => updateAudienceMember(index, 'var2', e.target.value)} placeholder="Var 2 ({{2}})" className="px-3 py-2 border border-gray-300 rounded text-sm" />
+                        <input type="text" value={member.var3} onChange={(e) => updateAudienceMember(index, 'var3', e.target.value)} placeholder="Var 3 ({{3}})" className="px-3 py-2 border border-gray-300 rounded text-sm" />
                       </div>
                       <div className="grid grid-cols-2 gap-2 mt-2">
-                        <input
-                          type="text"
-                          value={member.var4}
-                          onChange={(e) => updateAudienceMember(index, 'var4', e.target.value)}
-                          placeholder="Variable 4"
-                          className="px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm"
-                        />
-                        <input
-                          type="text"
-                          value={member.var5}
-                          onChange={(e) => updateAudienceMember(index, 'var5', e.target.value)}
-                          placeholder="Variable 5"
-                          className="px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm"
-                        />
+                        <input type="text" value={member.var4} onChange={(e) => updateAudienceMember(index, 'var4', e.target.value)} placeholder="Var 4 ({{4}})" className="px-3 py-2 border border-gray-300 rounded text-sm" />
+                        <input type="text" value={member.var5} onChange={(e) => updateAudienceMember(index, 'var5', e.target.value)} placeholder="Var 5 ({{5}})" className="px-3 py-2 border border-gray-300 rounded text-sm" />
                       </div>
                     </div>
                   ))}
                 </div>
-                <p className="mt-2 text-xs text-gray-500">Add phone numbers and template variables for each recipient</p>
+                <p className="mt-2 text-xs text-gray-500">CSV upload fills rows automatically. No contact loading (prevents browser freeze).</p>
               </div>
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
                 <button
@@ -1122,7 +1022,13 @@ function Campaigns() {
                   onClick={() => {
                     setShowEditModal(false);
                     setSelectedCampaign(null);
-                    setFormData({ name: '', description: '', type: 'broadcast', message: '', scheduledAt: '' });
+                    setFormData({
+                      name: '',
+                      template_name: '',
+                      template_language: 'en_US',
+                      schedule_time: null,
+                      audience: [{ phone: '', var1: '', var2: '', var3: '', var4: '', var5: '' }]
+                    });
                     setError('');
                   }}
                   className="text-gray-400 hover:text-gray-600"
@@ -1144,46 +1050,39 @@ function Campaigns() {
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
-                <textarea
-                  value={formData.description}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  rows={3}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                />
-              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Type *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Template Name *</label>
+                  <input
+                    type="text"
+                    value={formData.template_name}
+                    onChange={(e) => setFormData({ ...formData, template_name: e.target.value })}
+                    required
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                    placeholder="e.g., order_confirmation"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Template Language *</label>
                   <select
-                    value={formData.type}
-                    onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+                    value={formData.template_language}
+                    onChange={(e) => setFormData({ ...formData, template_language: e.target.value })}
                     required
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
                   >
-                    <option value="broadcast">Broadcast</option>
-                    <option value="automation">Automation</option>
-                    <option value="sequence">Sequence</option>
+                    <option value="en_US">English (US)</option>
+                    <option value="en_GB">English (UK)</option>
+                    <option value="hi_IN">Hindi</option>
+                    <option value="mr_IN">Marathi</option>
                   </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Schedule (Optional)</label>
-                  <input
-                    type="datetime-local"
-                    value={formData.scheduledAt}
-                    onChange={(e) => setFormData({ ...formData, scheduledAt: e.target.value })}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                  />
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Message *</label>
-                <textarea
-                  value={formData.message}
-                  onChange={(e) => setFormData({ ...formData, message: e.target.value })}
-                  required
-                  rows={5}
+                <label className="block text-sm font-medium text-gray-700 mb-2">Schedule (Optional)</label>
+                <input
+                  type="datetime-local"
+                  value={formData.schedule_time || ''}
+                  onChange={(e) => setFormData({ ...formData, schedule_time: e.target.value || null })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
                 />
               </div>
@@ -1193,7 +1092,13 @@ function Campaigns() {
                   onClick={() => {
                     setShowEditModal(false);
                     setSelectedCampaign(null);
-                    setFormData({ name: '', description: '', type: 'broadcast', message: '', scheduledAt: '' });
+                    setFormData({
+                      name: '',
+                      template_name: '',
+                      template_language: 'en_US',
+                      schedule_time: null,
+                      audience: [{ phone: '', var1: '', var2: '', var3: '', var4: '', var5: '' }]
+                    });
                     setError('');
                   }}
                   className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50 transition"
@@ -1369,13 +1274,13 @@ function Campaigns() {
                           <td className="px-4 py-3 text-sm text-gray-900">{log.phone}</td>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                              log.status === 'SENT' ? 'bg-green-100 text-green-800' :
-                              log.status === 'DELIVERED' ? 'bg-blue-100 text-blue-800' :
-                              log.status === 'READ' ? 'bg-purple-100 text-purple-800' :
-                              log.status === 'FAILED' ? 'bg-red-100 text-red-800' :
+                              (log.status || '').toLowerCase() === 'sent' ? 'bg-green-100 text-green-800' :
+                              (log.status || '').toLowerCase() === 'delivered' ? 'bg-blue-100 text-blue-800' :
+                              (log.status || '').toLowerCase() === 'read' ? 'bg-purple-100 text-purple-800' :
+                              (log.status || '').toLowerCase() === 'failed' ? 'bg-red-100 text-red-800' :
                               'bg-gray-100 text-gray-800'
                             }`}>
-                              {log.status}
+                              {(log.status || 'pending').toLowerCase()}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-xs text-gray-600">

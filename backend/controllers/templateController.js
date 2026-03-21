@@ -2,6 +2,26 @@ const axios = require('axios');
 const { Template } = require('../models');
 const { Op } = require('sequelize');
 
+const getMetaToken = () => {
+  return process.env.WHATSAPP_TOKEN ||
+    process.env.PERMANENT_TOKEN ||
+    process.env.WA_ACCESS_TOKEN ||
+    process.env.Whatsapp_Token;
+};
+
+const getMetaApiVersion = () => {
+  return process.env.WHATSAPP_API_VERSION || 'v22.0';
+};
+
+const normalizeComponentType = (t) => String(t || '').trim().toUpperCase();
+const normalizeMetaTemplateName = (name) => {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '');
+};
+
 // Create template locally (save to database only)
 exports.createTemplate = async (req, res) => {
   try {
@@ -13,7 +33,8 @@ exports.createTemplate = async (req, res) => {
       name,
       content,
       category: category || 'other',
-      variables: variables || []
+      variables: variables || [],
+      status: 'draft'
     });
 
     res.status(201).json({
@@ -43,6 +64,7 @@ exports.createMetaTemplate = async (req, res) => {
     
     const userId = req.user.id;
     const { name, category, language = "en_US", components } = req.body;
+    const normalizedName = normalizeMetaTemplateName(name);
 
     // Validate input
     if (!name || !category || !components) {
@@ -51,10 +73,20 @@ exports.createMetaTemplate = async (req, res) => {
         message: 'Missing required fields: name, category, components'
       });
     }
+    if (!normalizedName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid template name. Use letters/numbers/underscores only (Meta requirement).'
+      });
+    }
+    if (normalizedName !== name) {
+      console.warn(`⚠️ Normalizing template name for Meta: "${name}" → "${normalizedName}"`);
+    }
 
     // Check environment variables
     const WABA_ID = process.env.WABA_ID;
-    const TOKEN = process.env.WHATSAPP_TOKEN || process.env.Whatsapp_Token;
+    const TOKEN = getMetaToken();
+    const apiVersion = getMetaApiVersion();
 
     if (!WABA_ID || !TOKEN) {
       return res.status(400).json({
@@ -82,7 +114,7 @@ exports.createMetaTemplate = async (req, res) => {
     }
 
     // Validate that BODY component exists (required by Meta)
-    const hasBody = components.some(c => c.type === 'BODY');
+    const hasBody = components.some(c => normalizeComponentType(c.type) === 'BODY');
     if (!hasBody) {
       return res.status(400).json({
         success: false,
@@ -93,7 +125,8 @@ exports.createMetaTemplate = async (req, res) => {
     // Validate component types
     const validComponentTypes = ['HEADER', 'BODY', 'FOOTER', 'BUTTONS'];
     for (const component of components) {
-      if (!validComponentTypes.includes(component.type)) {
+      const normalizedType = normalizeComponentType(component.type);
+      if (!validComponentTypes.includes(normalizedType)) {
         return res.status(400).json({
           success: false,
           message: `Invalid component type: ${component.type}. Must be one of: ${validComponentTypes.join(', ')}`
@@ -101,7 +134,7 @@ exports.createMetaTemplate = async (req, res) => {
       }
 
       // Validate HEADER format
-      if (component.type === 'HEADER') {
+      if (normalizedType === 'HEADER') {
         const validFormats = ['TEXT', 'IMAGE', 'VIDEO', 'DOCUMENT'];
         if (!component.format || !validFormats.includes(component.format)) {
           return res.status(400).json({
@@ -112,7 +145,7 @@ exports.createMetaTemplate = async (req, res) => {
       }
 
       // Validate BUTTONS
-      if (component.type === 'BUTTONS') {
+      if (normalizedType === 'BUTTONS') {
         if (!component.buttons || !Array.isArray(component.buttons)) {
           return res.status(400).json({
             success: false,
@@ -173,17 +206,110 @@ exports.createMetaTemplate = async (req, res) => {
     }
 
     // Build Meta API payload
+    // Important: Meta rejects unknown/extra fields. Sanitize each component to only allowed keys.
+    // Also auto-generate BODY examples based on {{1}}, {{2}}, ... placeholders (Meta requires correct count + order).
+    const generateSmartSample = (index, text) => {
+      const t = String(text || '').toLowerCase();
+      // Common patterns — keep values generic but realistic and policy-safe
+      if (/\b(otp|one[\s-]?time\s+password|verification|verify|code)\b/.test(t)) return `code_${index}`;
+      if (/\b(order|invoice|receipt|booking|ticket|reference|ref)\b/.test(t)) return `ref_${index}`;
+      if (/\b(amount|total|price|cost|payment|paid|due|balance)\b/.test(t)) return `amount_${index}`;
+      if (/\b(date|day|time|slot|schedule|delivery)\b/.test(t)) return `date_${index}`;
+      if (/\b(name|customer|user)\b/.test(t)) return `name_${index}`;
+      if (/\b(product|item|plan)\b/.test(t)) return `item_${index}`;
+      if (/\b(location|address|city|state|country)\b/.test(t)) return `place_${index}`;
+      // Fallback: fully generic
+      return `value_${index}`;
+    };
+
+    const normalizedComponents = components.map((c) => {
+      const type = normalizeComponentType(c.type);
+
+      const clean = (obj) => {
+        if (!obj || typeof obj !== 'object') return obj;
+        const out = {};
+        for (const [k, v] of Object.entries(obj)) {
+          if (v === undefined || v === null) continue;
+          out[k] = v;
+        }
+        return out;
+      };
+
+      const buildBodyExample = (text) => {
+        const matches = String(text || '').match(/{{\d+}}/g);
+        if (!matches || !matches.length) return null;
+        const variableIndexes = [...new Set(matches.map((v) => parseInt(v.replace(/[{}]/g, ''), 10)))]
+          .filter((n) => Number.isFinite(n))
+          .sort((a, b) => a - b);
+        if (!variableIndexes.length) return null;
+        const sampleValues = variableIndexes.map((index) => generateSmartSample(index, text));
+        return { body_text: [sampleValues] };
+      };
+
+      if (type === 'BODY') {
+        const text = String(c.text || '').trim();
+        const example = buildBodyExample(text);
+        return clean({
+          type,
+          text,
+          ...(example ? { example } : {})
+        });
+      }
+
+      if (type === 'FOOTER') {
+        return clean({
+          type,
+          text: String(c.text || '').trim()
+        });
+      }
+
+      if (type === 'HEADER') {
+        // Pass through only allowed keys depending on format.
+        // For TEXT headers, Meta may accept example.header_text (array).
+        // For media headers, the example shape differs; we keep any provided example object but strip unknown top-level keys.
+        const header = clean({
+          type,
+          format: c.format ? String(c.format).trim().toUpperCase() : undefined,
+          text: c.text != null ? String(c.text) : undefined,
+          example: c.example && typeof c.example === 'object' ? c.example : undefined
+        });
+        // If header format is TEXT, ensure we don't accidentally send non-string text.
+        if (header.format === 'TEXT' && typeof header.text !== 'string') header.text = String(header.text || '');
+        return header;
+      }
+
+      if (type === 'BUTTONS') {
+        const buttons = Array.isArray(c.buttons) ? c.buttons : [];
+        const normalizedButtons = buttons.map((b) =>
+          clean({
+            type: b.type ? String(b.type).trim().toUpperCase() : undefined,
+            text: b.text != null ? String(b.text) : undefined,
+            url: b.url != null ? String(b.url) : undefined,
+            phone_number: b.phone_number != null ? String(b.phone_number) : undefined,
+            example: b.example && Array.isArray(b.example) ? b.example : undefined
+          })
+        );
+        return clean({
+          type,
+          buttons: normalizedButtons
+        });
+      }
+
+      // Fallback: never send unknown component types
+      return clean({ type });
+    });
+
     const metaPayload = {
-      name: name,
+      name: normalizedName,
       category: metaCategory,
       language: language,
-      components: components
+      components: normalizedComponents
     };
 
     console.log('📤 Submitting template to Meta API:', JSON.stringify(metaPayload, null, 2));
 
     // Submit to Meta API
-    const url = `https://graph.facebook.com/v19.0/${WABA_ID}/message_templates`;
+    const url = `https://graph.facebook.com/${apiVersion}/${WABA_ID}/message_templates`;
     let response;
     try {
       response = await axios.post(
@@ -204,7 +330,13 @@ exports.createMetaTemplate = async (req, res) => {
       }
     } catch (apiError) {
       console.error("Meta API Error:", apiError?.response?.data || apiError.message);
-      const errorMsg = apiError?.response?.data?.error?.message || apiError.message || "Failed to submit template";
+      const metaErr = apiError?.response?.data?.error;
+      const errorMsg =
+        metaErr?.error_user_msg ||
+        metaErr?.error_user_title ||
+        metaErr?.message ||
+        apiError.message ||
+        "Failed to submit template";
       
       return res.status(500).json({
         success: false,
@@ -214,27 +346,27 @@ exports.createMetaTemplate = async (req, res) => {
     }
 
     // Extract body text from components for local storage
-    const bodyComponent = components.find(c => c.type === 'BODY');
+    const bodyComponent = normalizedComponents.find(c => normalizeComponentType(c.type) === 'BODY');
     const bodyText = bodyComponent?.text || name;
 
     // Extract template features for better storage
-    const hasHeader = components.some(c => c.type === 'HEADER');
-    const hasButtons = components.some(c => c.type === 'BUTTONS');
-    const hasFooter = components.some(c => c.type === 'FOOTER');
-    const buttonCount = hasButtons ? components.find(c => c.type === 'BUTTONS')?.buttons?.length || 0 : 0;
+    const hasHeader = normalizedComponents.some(c => normalizeComponentType(c.type) === 'HEADER');
+    const hasButtons = normalizedComponents.some(c => normalizeComponentType(c.type) === 'BUTTONS');
+    const hasFooter = normalizedComponents.some(c => normalizeComponentType(c.type) === 'FOOTER');
+    const buttonCount = hasButtons ? normalizedComponents.find(c => normalizeComponentType(c.type) === 'BUTTONS')?.buttons?.length || 0 : 0;
     
     console.log('📋 Template features:', {
       hasHeader,
       hasButtons,
       hasFooter,
       buttonCount,
-      headerFormat: hasHeader ? components.find(c => c.type === 'HEADER')?.format : null
+      headerFormat: hasHeader ? normalizedComponents.find(c => normalizeComponentType(c.type) === 'HEADER')?.format : null
     });
 
     // Map Meta category to our category enum
     let localCategory = 'other';
     if (metaCategory === 'MARKETING') localCategory = 'marketing';
-    else if (metaCategory === 'UTILITY') localCategory = 'transactional';
+    else if (metaCategory === 'UTILITY') localCategory = 'utility';
     else if (metaCategory === 'AUTHENTICATION') localCategory = 'notification';
 
     // Save to local database with PENDING status
@@ -243,7 +375,7 @@ exports.createMetaTemplate = async (req, res) => {
       // Check if template already exists
       const existingTemplate = await Template.findOne({
         where: {
-          name: name,
+          name: normalizedName,
           userId: userId
         }
       });
@@ -253,7 +385,7 @@ exports.createMetaTemplate = async (req, res) => {
         await existingTemplate.update({
           content: bodyText,
           category: localCategory,
-          status: 'draft', // Will be updated when Meta approves
+          status: 'draft', // Will be updated when Meta approves (via /templates/meta sync)
           variables: []
         });
         template = existingTemplate;
@@ -262,7 +394,7 @@ exports.createMetaTemplate = async (req, res) => {
         // Create new template
         template = await Template.create({
           userId: userId,
-          name: name,
+          name: normalizedName,
           content: bodyText,
           category: localCategory,
           status: 'draft', // Will be updated when Meta approves
@@ -280,6 +412,19 @@ exports.createMetaTemplate = async (req, res) => {
     const metaStatus = response?.data?.status || 'PENDING';
     const rejectionReason = response?.data?.rejection_reason || null;
     const qualityRating = response?.data?.quality_rating || null;
+
+    // Persist Meta identifiers + rejection reason for UI visibility
+    try {
+      if (template) {
+        await template.update({
+          metaTemplateId,
+          metaStatus,
+          rejectionReason: metaStatus === 'REJECTED' ? rejectionReason : null
+        });
+      }
+    } catch (e) {
+      console.error('⚠️ Failed to persist Meta template status fields:', e.message);
+    }
 
     // Log rejection details if available
     if (metaStatus === 'REJECTED') {
@@ -300,7 +445,9 @@ exports.createMetaTemplate = async (req, res) => {
       status: metaStatus,
       rejectionReason: rejectionReason,
       qualityRating: qualityRating,
-      template: template || null
+      template: template
+        ? await Template.findByPk(template.id)
+        : null
     });
   } catch (error) {
     console.error("Create Meta Template Error:", error);
@@ -382,7 +529,7 @@ exports.updateTemplate = async (req, res) => {
   try {
     const userId = req.user.id;
     const { id } = req.params;
-    const { name, content, category, status, variables } = req.body;
+    const { name, content, category, variables } = req.body;
 
     const template = await Template.findOne({
       where: { id, userId }
@@ -398,7 +545,6 @@ exports.updateTemplate = async (req, res) => {
     if (name) template.name = name;
     if (content) template.content = content;
     if (category) template.category = category;
-    if (status) template.status = status;
     if (variables) template.variables = variables;
 
     await template.save();
@@ -452,7 +598,8 @@ exports.getMetaTemplates = async (req, res) => {
   try {
     const userId = req.user.id;
     const WABA_ID = process.env.WABA_ID;
-    const TOKEN = process.env.WHATSAPP_TOKEN || process.env.Whatsapp_Token;
+    const TOKEN = getMetaToken();
+    const apiVersion = getMetaApiVersion();
 
     if (!WABA_ID || !TOKEN) {
       return res.status(400).json({
@@ -461,7 +608,7 @@ exports.getMetaTemplates = async (req, res) => {
       });
     }
 
-    const url = `https://graph.facebook.com/v19.0/${WABA_ID}/message_templates`;
+    const url = `https://graph.facebook.com/${apiVersion}/${WABA_ID}/message_templates`;
 
     const response = await axios.get(url, {
       headers: {
@@ -494,7 +641,7 @@ exports.getMetaTemplates = async (req, res) => {
         // Map Meta category to our category enum
         let category = 'other';
         if (metaTemplate.category === 'MARKETING') category = 'marketing';
-        else if (metaTemplate.category === 'UTILITY') category = 'transactional';
+        else if (metaTemplate.category === 'UTILITY') category = 'utility';
         else if (metaTemplate.category === 'AUTHENTICATION') category = 'notification';
 
         // Map Meta status to our status enum
@@ -560,10 +707,26 @@ exports.getMetaTemplates = async (req, res) => {
     });
   } catch (error) {
     console.error("Meta API Error:", error.response?.data || error);
-    return res.status(500).json({
+    // Ensure error is a string so frontend never shows [object Object]
+    let errorMessage = error.message || "Unknown error";
+    if (error.response?.data) {
+      const d = error.response.data;
+      if (typeof d === "string") errorMessage = d;
+      else if (d.error?.message) errorMessage = d.error.message;
+      else if (d.message) errorMessage = d.message;
+      else if (d.error) errorMessage = typeof d.error === "string" ? d.error : JSON.stringify(d.error);
+      else errorMessage = JSON.stringify(d);
+    }
+    // Meta "does not exist" or "missing permissions" = config issue, not server bug
+    const isMetaConfigError = error.response?.status === 400 || error.response?.status === 403 ||
+      /does not exist|cannot be loaded due to missing permissions|does not support this operation/i.test(errorMessage);
+    const hint = isMetaConfigError
+      ? " Fix: Use your WhatsApp Business Account ID (WABA ID) in .env WABA_ID — find it in Meta Business Suite → WhatsApp → API Setup. Ensure your token has whatsapp_business_management permission."
+      : "";
+    return res.status(isMetaConfigError ? 400 : 500).json({
       success: false,
-      message: "Failed to fetch templates",
-      error: error.response?.data || error.message
+      message: "Failed to fetch templates from Meta",
+      error: errorMessage + hint
     });
   }
 };
@@ -574,7 +737,8 @@ exports.getMetaTemplateDetails = async (req, res) => {
     const { templateId } = req.params; // Meta template ID
     
     const WABA_ID = process.env.WABA_ID;
-    const TOKEN = process.env.WHATSAPP_TOKEN || process.env.Whatsapp_Token;
+    const TOKEN = getMetaToken();
+    const apiVersion = getMetaApiVersion();
 
     if (!WABA_ID || !TOKEN) {
       return res.status(400).json({
@@ -590,7 +754,7 @@ exports.getMetaTemplateDetails = async (req, res) => {
       });
     }
 
-    const url = `https://graph.facebook.com/v21.0/${templateId}`;
+    const url = `https://graph.facebook.com/${apiVersion}/${templateId}`;
 
     try {
       const response = await axios.get(url, {
@@ -598,7 +762,8 @@ exports.getMetaTemplateDetails = async (req, res) => {
           Authorization: `Bearer ${TOKEN}`
         },
         params: {
-          fields: 'id,name,status,category,language,components'
+          // include rejection details when available
+          fields: 'id,name,status,category,language,components,reason,rejection_info,quality_rating'
         }
       });
 
