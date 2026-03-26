@@ -35,6 +35,7 @@ const cannedMessageRoutes = require('./routes/cannedMessageRoutes');
 const superAdminRoutes = require('./routes/superAdminRoutes');
 const agentCannedMessageRoutes = require('./routes/agentCannedMessageRoutes');
 const flowRoutes = require('./routes/flowRoutes');
+const reportsRoutes = require('./routes/reportsRoutes');
 
 // Initialize Express app
 const app = express();
@@ -124,6 +125,7 @@ app.use('/api/templates', templateRoutes);
 app.use('/api/canned-messages', cannedMessageRoutes);
 app.use('/api/agent/canned-messages', agentCannedMessageRoutes);
 app.use('/api', flowRoutes);
+app.use('/api/reports', reportsRoutes);
 app.use("/api/settings", settingRoutes);
 // Webhook endpoint - single clean route
 app.use('/webhook', metaWebhookRoutes);

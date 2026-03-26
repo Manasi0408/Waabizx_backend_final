@@ -52,8 +52,8 @@ router.post(
 router.post(
   "/assign-agent",
   protect,
-  isManager,
-  chatController.assignChat
+  isAgentOrManager,
+  chatController.assignAgentTakeover
 );
 
 module.exports = router;

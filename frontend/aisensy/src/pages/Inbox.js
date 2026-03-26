@@ -2574,7 +2574,13 @@ function Inbox() {
                         const phone = selectedContact.phone;
                         if (!phone) return;
                         try {
-                          const result = await interveneByPhone(phone);
+                          let selectedAgentId = null;
+                          try {
+                            const raw = localStorage.getItem('selectedAgent');
+                            const parsed = raw ? JSON.parse(raw) : null;
+                            selectedAgentId = parsed?.id ?? parsed?._id ?? null;
+                          } catch (e) {}
+                          const result = await interveneByPhone(phone, selectedAgentId);
                           if (result?.success) {
                             setIntervenedPhones((prev) => ({ ...prev, [phone]: true }));
                             fetchInboxList(false);
@@ -2730,7 +2736,13 @@ function Inbox() {
                           const phone = selectedContact.phone;
                           if (!phone) return;
                           try {
-                            const result = await interveneByPhone(phone);
+                            let selectedAgentId = null;
+                            try {
+                              const raw = localStorage.getItem('selectedAgent');
+                              const parsed = raw ? JSON.parse(raw) : null;
+                              selectedAgentId = parsed?.id ?? parsed?._id ?? null;
+                            } catch (e) {}
+                            const result = await interveneByPhone(phone, selectedAgentId);
                             if (result?.success) {
                               setIntervenedPhones((prev) => ({ ...prev, [phone]: true }));
                               fetchInboxList(false);

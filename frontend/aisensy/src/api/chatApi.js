@@ -113,14 +113,14 @@ export const closeChat = async (id) => {
 };
 
 // Manager/Admin: intervene by phone (for /inbox)
-export const interveneByPhone = async (phone) => {
+export const interveneByPhone = async (phone, agentId = null) => {
   const res = await fetch(`${API_BASE}/chat/intervene-by-phone`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...getAuthHeaders(),
     },
-    body: JSON.stringify({ phone }),
+    body: JSON.stringify({ phone, agentId }),
   });
   return res.json();
 };
@@ -128,6 +128,23 @@ export const interveneByPhone = async (phone) => {
 // Manager: assign conversation to an agent (appears in Agent Requesting tab)
 export const assignChatToAgent = async (conversationId, agentId) => {
   const res = await fetch(`${API_BASE}/assign`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify({
+      conversationId,
+      agentId,
+    }),
+  });
+
+  return res.json();
+};
+
+// Agent takeover / explicit assignment endpoint
+export const assignAgentTakeover = async (conversationId, agentId) => {
+  const res = await fetch(`${API_BASE}/assign-agent`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

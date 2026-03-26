@@ -332,8 +332,8 @@ exports.handleWebhook = async (req, res) => {
               convId = convRows[0].id;
             } else {
               const [ins] = await db.query(
-                "INSERT INTO conversations (phone, last_message, status) VALUES (?, ?, 'requesting')",
-                [fromNumber, text]
+                "INSERT INTO conversations (phone, customer_name, last_message, status) VALUES (?, ?, ?, 'requesting')",
+                [fromNumber, fromNumber, text]
               );
               convId = ins.insertId;
             }
@@ -342,6 +342,7 @@ exports.handleWebhook = async (req, res) => {
               [convId, text, timestamp]
             );
             await db.query("UPDATE conversations SET last_message = ? WHERE id = ?", [text, convId]);
+            await db.query("UPDATE conversations SET customer_name = ? WHERE id = ?", [fromNumber, convId]);
             console.log('✅ Synced incoming message to live-chat (conversation id:', convId + ')');
           } catch (syncErr) {
             console.error('Error syncing to live-chat:', syncErr);
@@ -588,8 +589,8 @@ exports.handleWebhook = async (req, res) => {
               conversationId = convRows[0].id;
             } else {
               const [ins] = await db.query(
-                "INSERT INTO conversations (phone, last_message, status) VALUES (?, ?, 'requesting')",
-                [phone, text]
+                "INSERT INTO conversations (phone, customer_name, last_message, status) VALUES (?, ?, ?, 'requesting')",
+                [phone, phone, text]
               );
               conversationId = ins.insertId;
             }
@@ -598,6 +599,7 @@ exports.handleWebhook = async (req, res) => {
               [conversationId, text]
             );
             await db.query("UPDATE conversations SET last_message = ? WHERE id = ?", [text, conversationId]);
+            await db.query("UPDATE conversations SET customer_name = ? WHERE id = ?", [phone, conversationId]);
             console.log('✅ Synced incoming message to live-chat (conversation id:', conversationId + ')');
           } catch (syncErr) {
             console.error('Error syncing to live-chat:', syncErr);

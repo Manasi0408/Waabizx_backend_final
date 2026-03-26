@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "react-router-dom";
-import { getActiveChats, getRequestingChats, getManagerRequesting, getAgentRequesting, getIntervenedChats, getMessages, acceptChat, assignChatToAgent, sendMessage as sendChatMessage } from "../api/chatApi";
+import { getActiveChats, getRequestingChats, getManagerRequesting, getAgentRequesting, getIntervenedChats, getMessages, assignAgentTakeover, assignChatToAgent, sendMessage as sendChatMessage } from "../api/chatApi";
 import AgentSidebar from "../components/AgentSidebar";
 import AgentTopbar from "../components/AgentTopbar";
 import { initializeSocket, onSocketEvent, offSocketEvent } from "../services/socketService";
@@ -357,15 +357,15 @@ function LiveChatPage() {
     e.stopPropagation();
     if (!isAgent) return;
     try {
-      await acceptChat(conv.id);
-      setTab("active");
-      const data = await getActiveChats();
+      await assignAgentTakeover(conv.id, currentUserId);
+      setTab("intervened");
+      const data = await getIntervenedChats();
       const list = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : []);
       setConversations(list);
       const updated = list.find((c) => c.id === conv.id);
       if (updated) setSelectedChat(updated);
     } catch (err) {
-      setError(err.message || "Failed to accept chat");
+      setError(err.message || "Failed to take over chat");
     }
   };
 

@@ -36,8 +36,8 @@ exports.receiveMessage = async (req, res) => {
 
     if (rows.length === 0) {
       const [result] = await db.query(
-        "INSERT INTO conversations (phone, last_message, status) VALUES (?, ?, 'requesting')",
-        [phone, message]
+        "INSERT INTO conversations (phone, customer_name, last_message, status) VALUES (?, ?, ?, 'requesting')",
+        [phone, phone, message]
       );
       convId = result.insertId;
     } else {
@@ -127,6 +127,13 @@ exports.receiveMessage = async (req, res) => {
             timestamp: new Date(),
           });
           await contact.update({ lastContacted: new Date() });
+
+          // Ensure conversations.customer_name is never NULL/blank.
+          // Prefer contact.name, fallback to phone.
+          await db.query(
+            "UPDATE conversations SET customer_name=? WHERE id=?",
+            [contact.name || normalizedPhone, convId]
+          );
           try {
             socketService.emitToUser(contact.userId, "inbox-update", { contactId: contact.id });
             socketService.emitToManager("inbox-update", { contactId: contact.id });
@@ -467,18 +474,32 @@ exports.interveneChat = async (req, res) => {
 exports.interveneByPhone = async (req, res) => {
   try {
     const phone = (req.body?.phone || req.query?.phone || "").toString().trim();
+    const bodyAgentId = req.body?.agentId != null ? Number(req.body.agentId) : null;
+    const requesterId = req.user?.id != null ? Number(req.user.id) : null;
     if (!phone) {
       return res.status(400).json({ success: false, message: "phone is required" });
     }
     const [rows] = await db.query(
-      "SELECT id FROM conversations WHERE phone = ? AND status != 'closed' ORDER BY id DESC LIMIT 1",
+      "SELECT id, agent_id FROM conversations WHERE phone = ? AND status != 'closed' ORDER BY id DESC LIMIT 1",
       [phone]
     );
     if (!rows || rows.length === 0) {
       return res.status(404).json({ success: false, message: "No open conversation found for this phone" });
     }
     const id = rows[0].id;
-    await db.query("UPDATE conversations SET status='intervened' WHERE id=?", [id]);
+    const currentAgentId = rows[0].agent_id != null ? Number(rows[0].agent_id) : null;
+
+    // Priority:
+    // 1) explicitly selected agent from UI
+    // 2) already assigned agent on conversation
+    // 3) authenticated requester (fallback)
+    const finalAgentId = bodyAgentId || currentAgentId || requesterId || null;
+
+    if (finalAgentId != null) {
+      await db.query("UPDATE conversations SET status='intervened', agent_id=? WHERE id=?", [finalAgentId, id]);
+    } else {
+      await db.query("UPDATE conversations SET status='intervened' WHERE id=?", [id]);
+    }
     res.json({ success: true, message: "Human intervention started" });
   } catch (err) {
     console.error(err);
@@ -766,6 +787,43 @@ exports.assignChat = async (req, res) => {
     );
 
     res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Agent/Admin takeover endpoint:
+// Expects body: { conversationId, agentId }
+// Sets explicit ownership + intervened status.
+exports.assignAgentTakeover = async (req, res) => {
+  try {
+    const body = req.body || {};
+    const conversationId = body.conversationId;
+    const bodyAgentId = body.agentId;
+    const requesterId = req.user?.id;
+
+    if (!conversationId) {
+      return res.status(400).json({
+        success: false,
+        message: "conversationId is required",
+      });
+    }
+
+    const finalAgentId = Number(bodyAgentId || requesterId);
+    if (!finalAgentId || Number.isNaN(finalAgentId)) {
+      return res.status(400).json({
+        success: false,
+        message: "agentId is required",
+      });
+    }
+
+    await db.query(
+      "UPDATE conversations SET agent_id = ?, status = 'intervened' WHERE id = ?",
+      [finalAgentId, conversationId]
+    );
+
+    res.json({ success: true, message: "Assigned" });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

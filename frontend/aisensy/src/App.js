@@ -216,6 +216,7 @@ import AgentManageCannedMessagesPage from './pages/AgentManageCannedMessagesPage
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import CampaignReportsPage from './pages/CampaignReportsPage';
 import HistoryPage from './pages/HistoryPage';
+import ReportsComingSoonPage from './pages/ReportsComingSoonPage';
 import AgentChatPage from './pages/AgentChatPage';
 import AdminDashboard from './pages/AdminDashboard';
 import AgentDashboard from './pages/AgentDashboard';
@@ -559,6 +560,15 @@ function App() {
           element={
             <ProtectedRoute>
               <HistoryPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/reports"
+          element={
+            <ProtectedRoute>
+              <ReportsComingSoonPage />
             </ProtectedRoute>
           }
         />
