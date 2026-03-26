@@ -1,5 +1,8 @@
 const db = require("../config/db");
 const { sendText } = require("../services/whatsappService");
+const { Contact } = require("../models");
+const { upsertConversationWithQuota } = require("../services/conversationBillingService");
+const { recordOutboundInboxMessage } = require("../services/outboundInboxService");
 
 const chatListFields = `id,phone,customer_name,last_message,last_message_time,unread_count,status`;
 
@@ -73,7 +76,23 @@ exports.sendMessage = async (req, res) => {
       });
     }
 
-    await sendText(phone, message);
+    // Conversation billing/quota enforcement (24-hour rolling).
+    let billingAllowed = true;
+    try {
+      const contact = await Contact.findOne({ where: { phone } });
+      if (contact) {
+        const billing = await upsertConversationWithQuota(contact.userId, phone);
+        billingAllowed = !!billing.allowed;
+      }
+    } catch (billingErr) {
+      console.error('Conversation billing check failed (agentChatController.sendMessage):', billingErr?.message || billingErr);
+    }
+
+    if (billingAllowed) {
+      await sendText(phone, message);
+    } else {
+      console.log('❌ Blocked agent chat sendText (conversation limit reached):', phone);
+    }
 
     await db.query(
       `INSERT INTO agent_messages
@@ -88,6 +107,8 @@ exports.sendMessage = async (req, res) => {
       WHERE id=?`,
       [message, conversation_id]
     );
+
+    await recordOutboundInboxMessage(phone, message, { status: 'sent' });
 
     res.json({ success: true });
   } catch (err) {

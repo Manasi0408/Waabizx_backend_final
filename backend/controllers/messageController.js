@@ -2,6 +2,7 @@ const axios = require('axios');
 const { Message, Contact, User, InboxMessage, Template } = require('../models');
 const { Op } = require('sequelize');
 const socketService = require('../services/socketService');
+const { upsertConversationWithQuota } = require('../services/conversationBillingService');
 
 // Send message via Meta API
 exports.sendMessage = async (req, res) => {
@@ -138,6 +139,37 @@ exports.sendMessage = async (req, res) => {
       }
     } else {
       console.log('✅ Contact found (ID:', contact.id + ')');
+    }
+
+    // Conversation billing/quota enforcement (24-hour rolling).
+    // Charges only when a new conversation session starts.
+    let billingAllowed = true;
+    try {
+      const billing = await upsertConversationWithQuota(userId, phone);
+      billingAllowed = !!billing.allowed;
+    } catch (billingErr) {
+      console.error('Conversation billing check failed (messageController.sendMessage):', billingErr?.message || billingErr);
+    }
+
+    if (!billingAllowed) {
+      try {
+        await InboxMessage.create({
+          contactId: contact.id,
+          userId,
+          direction: "outgoing",
+          message,
+          type: "text",
+          status: "failed",
+          timestamp: new Date()
+        });
+      } catch (saveErr) {
+        console.error('Error saving blocked message by quota:', saveErr);
+      }
+
+      return res.status(403).json({
+        success: false,
+        msg: "Blocked (conversation limit reached)"
+      });
     }
 
     // Send via Meta API (works for both verified and non-verified numbers)
@@ -632,6 +664,63 @@ exports.sendTemplate = async (req, res) => {
         status: 'active'
       });
       console.log('✅ New contact created for template (ID:', contact.id + ')');
+    }
+
+    // Enforce opt-in/out before sending
+    const isOptedIn =
+      contact.status !== 'unsubscribed' &&
+      !!contact.whatsappOptInAt;
+
+    if (!isOptedIn) {
+      try {
+        await InboxMessage.create({
+          contactId: contact.id,
+          userId,
+          direction: "outgoing",
+          message: `Template: ${templateName}`,
+          type: "text",
+          status: "failed",
+          timestamp: new Date()
+        });
+      } catch (saveErr) {
+        console.error('Error saving blocked template:', saveErr);
+      }
+
+      return res.status(403).json({
+        success: false,
+        msg: "Blocked (opt-out / not opted-in)"
+      });
+    }
+
+    // Conversation billing/quota enforcement (24-hour rolling).
+    // Charges only when a new conversation session starts.
+    let billingAllowed = true;
+    try {
+      const billing = await upsertConversationWithQuota(userId, phone);
+      billingAllowed = !!billing.allowed;
+    } catch (billingErr) {
+      console.error('Conversation billing check failed (messageController.sendTemplate):', billingErr?.message || billingErr);
+    }
+
+    if (!billingAllowed) {
+      try {
+        await InboxMessage.create({
+          contactId: contact.id,
+          userId,
+          direction: "outgoing",
+          message: `Template: ${templateName}`,
+          type: "text",
+          status: "failed",
+          timestamp: new Date()
+        });
+      } catch (saveErr) {
+        console.error('Error saving blocked template by quota:', saveErr);
+      }
+
+      return res.status(403).json({
+        success: false,
+        msg: "Blocked (conversation limit reached)"
+      });
     }
 
     // Build template payload

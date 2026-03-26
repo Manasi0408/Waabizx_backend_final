@@ -1,6 +1,16 @@
 const express = require('express');
 const router = express.Router();
-const { register, login, getProfile, updateProfile, listAgents, updateAgent } = require('../controllers/authController');
+const {
+  register,
+  requestRegisterOtp,
+  resendRegisterOtp,
+  verifyRegisterOtp,
+  login,
+  getProfile,
+  updateProfile,
+  listAgents,
+  updateAgent
+} = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
 const { authorize } = require('../middleware/roleMiddleware');
 
@@ -41,6 +51,9 @@ router.post('/debug', (req, res) => {
 });
 
 router.post('/register', register);
+router.post('/register/request-otp', requestRegisterOtp);
+router.post('/register/resend-otp', resendRegisterOtp);
+router.post('/register/verify-otp', verifyRegisterOtp);
 router.post('/login', login);
 router.get('/profile', protect, getProfile);
 router.put('/profile', protect, updateProfile);

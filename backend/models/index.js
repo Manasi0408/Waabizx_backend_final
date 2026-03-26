@@ -12,6 +12,9 @@ const ClientWhatsApp = require('./ClientWhatsApp');
 const Client = require('./Client');
 const WhatsAppAccount = require('./WhatsAppAccount');
 const CannedMessage = require('./CannedMessage');
+const Flow = require("./Flow");
+const Account = require('./Account');
+const RealConversation = require('./RealConversation');
 
 // Import meta models for webhooks
 const WebhookLog = require('./metaWebhook')(sequelize, DataTypes);
@@ -100,6 +103,24 @@ const syncDatabase = async () => {
     } catch (userError) {
       console.error('⚠️  User table sync error:', userError.message);
     }
+    // Ensure Users mobile column exists (supports mobile_number / mobileNumber)
+    try {
+      const queryInterface = sequelize.getQueryInterface();
+      const table = await queryInterface.describeTable('Users');
+      const hasMobileColumn = !!table.mobile_number || !!table.mobileNumber;
+      if (!hasMobileColumn) {
+        await queryInterface.addColumn('Users', 'mobile_number', {
+          type: DataTypes.STRING(20),
+          allowNull: true,
+          unique: true
+        });
+        console.log('✅ Users.mobile_number column added.');
+      } else {
+        console.log('✅ Users mobile column already exists.');
+      }
+    } catch (mobileColumnError) {
+      console.error('⚠️  Users mobile column ensure error:', mobileColumnError.message);
+    }
     // Ensure Contact table has whatsappOptInAt for keyword opt-in
     try {
       const Contact = require('./Contact');
@@ -136,6 +157,14 @@ const syncDatabase = async () => {
     } catch (cannedError) {
       console.error('⚠️  CannedMessage table sync error:', cannedError.message);
     }
+
+    // Ensure Flow table exists
+    try {
+      await Flow.sync({ force: false, alter: true });
+      console.log("✅ Flow table verified/created.");
+    } catch (flowError) {
+      console.error("⚠️ Flow table sync error:", flowError.message);
+    }
   } catch (error) {
     console.error('❌ Database synchronization failed:', error.message);
     console.error('Full error:', error);
@@ -158,6 +187,9 @@ module.exports = {
   Client,
   WhatsAppAccount,
   CannedMessage,
+  Flow,
+  Account,
+  RealConversation,
   WebhookLog,
   MetaMessage,
   syncDatabase

@@ -158,7 +158,7 @@ exports.createMetaTemplate = async (req, res) => {
             message: 'Maximum 3 buttons allowed per template'
           });
         }
-        const validButtonTypes = ['QUICK_REPLY', 'URL', 'PHONE_NUMBER'];
+        const validButtonTypes = ['QUICK_REPLY', 'URL', 'PHONE_NUMBER', 'OTP'];
         for (const button of component.buttons) {
           if (!validButtonTypes.includes(button.type)) {
             return res.status(400).json({
@@ -198,6 +198,18 @@ exports.createMetaTemplate = async (req, res) => {
               return res.status(400).json({
                 success: false,
                 message: 'PHONE_NUMBER button must have a phone number starting with +'
+              });
+            }
+          }
+
+          // Validate OTP button (for AUTHENTICATION templates)
+          if (button.type === 'OTP' && button.otp_type) {
+            const validOtpTypes = ['COPY_CODE', 'ONE_TAP', 'ZERO_TAP'];
+            const otpType = String(button.otp_type).toUpperCase();
+            if (!validOtpTypes.includes(otpType)) {
+              return res.status(400).json({
+                success: false,
+                message: `OTP button otp_type must be one of: ${validOtpTypes.join(', ')}`
               });
             }
           }
@@ -299,11 +311,45 @@ exports.createMetaTemplate = async (req, res) => {
       return clean({ type });
     });
 
+    // Meta AUTHENTICATION templates require OTP-specific component schema.
+    // BODY.text is not allowed for this category, so we convert incoming UI data.
+    const authNormalizedComponents = (() => {
+      if (metaCategory !== 'AUTHENTICATION') return null;
+
+      const footer = components.find(c => normalizeComponentType(c.type) === 'FOOTER');
+      const footerText = String(footer?.text || '');
+      const minutesMatch = footerText.match(/(\d{1,3})/);
+      const parsedMinutes = minutesMatch ? parseInt(minutesMatch[1], 10) : 5;
+      const codeExpirationMinutes = Number.isFinite(parsedMinutes)
+        ? Math.max(1, Math.min(parsedMinutes, 90))
+        : 5;
+
+      return [
+        {
+          type: 'BODY',
+          add_security_recommendation: true
+        },
+        {
+          type: 'FOOTER',
+          code_expiration_minutes: codeExpirationMinutes
+        },
+        {
+          type: 'BUTTONS',
+          buttons: [
+            {
+              type: 'OTP',
+              otp_type: 'COPY_CODE'
+            }
+          ]
+        }
+      ];
+    })();
+
     const metaPayload = {
       name: normalizedName,
       category: metaCategory,
       language: language,
-      components: normalizedComponents
+      components: authNormalizedComponents || normalizedComponents
     };
 
     console.log('📤 Submitting template to Meta API:', JSON.stringify(metaPayload, null, 2));

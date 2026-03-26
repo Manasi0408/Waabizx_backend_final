@@ -2,6 +2,10 @@ const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 const bcrypt = require('bcryptjs');
 
+const looksLikeBcryptHash = (value) => {
+  return typeof value === 'string' && /^\$2[aby]\$\d{2}\$/.test(value);
+};
+
 const User = sequelize.define('User', {
   id: {
     type: DataTypes.INTEGER,
@@ -24,6 +28,15 @@ const User = sequelize.define('User', {
       notEmpty: true
     }
   },
+  mobileNumber: {
+    type: DataTypes.STRING(20),
+    field: 'mobile_number',
+    allowNull: true,
+    unique: true,
+    validate: {
+      len: [8, 20]
+    }
+  },
   password: {
     type: DataTypes.STRING,
     allowNull: false,
@@ -37,7 +50,7 @@ const User = sequelize.define('User', {
     defaultValue: null
   },
   role: {
-    type: DataTypes.ENUM('admin', 'manager', 'agent', 'user'),
+    type: DataTypes.ENUM('admin', 'super_admin', 'manager', 'agent', 'user'),
     defaultValue: 'user'
   },
   status: {
@@ -57,12 +70,18 @@ const User = sequelize.define('User', {
   hooks: {
     beforeCreate: async (user) => {
       if (user.password) {
-        user.password = await bcrypt.hash(user.password, 10);
+        // Avoid double-hashing if the password was already stored as a bcrypt hash.
+        if (!looksLikeBcryptHash(user.password)) {
+          user.password = await bcrypt.hash(user.password, 10);
+        }
       }
     },
     beforeUpdate: async (user) => {
       if (user.changed('password')) {
-        user.password = await bcrypt.hash(user.password, 10);
+        // Avoid double-hashing if the password was already stored as a bcrypt hash.
+        if (!looksLikeBcryptHash(user.password)) {
+          user.password = await bcrypt.hash(user.password, 10);
+        }
       }
     }
   }

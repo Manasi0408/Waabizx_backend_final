@@ -195,6 +195,38 @@ export const optOutContact = async (contactId) => {
   }
 };
 
+// Opt-in contact
+export const optInContact = async (contactId) => {
+  try {
+    const token = getToken();
+    if (!token) {
+      throw new Error('No token found');
+    }
+
+    const response = await fetch(`${API_URL}/contacts/${contactId}/opt-in`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || data.message || 'Failed to opt-in contact');
+    }
+
+    if (data.success) {
+      return data.contact;
+    }
+
+    throw new Error(data.message || 'Failed to opt-in contact');
+  } catch (error) {
+    throw error;
+  }
+};
+
 // Delete contact
 export const deleteContact = async (contactId) => {
   try {

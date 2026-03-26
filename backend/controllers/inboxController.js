@@ -2,6 +2,7 @@ const { Contact, Message, MetaMessage, InboxMessage, sequelize } = require('../m
 const { Op } = require('sequelize');
 const { sendText, sendTemplate } = require('../services/whatsappService');
 const socketService = require('../services/socketService');
+const { upsertConversationWithQuota } = require('../services/conversationBillingService');
 
 const isAgentRole = (r) => (r || '').toString().toLowerCase() === 'agent';
 
@@ -60,7 +61,15 @@ exports.getInboxList = async (req, res) => {
           WHERE m.contactId = c.id 
             AND m.type = 'incoming' 
             AND m.status != 'read'
-        ) as unreadCount
+        ) as unreadCount,
+        (
+          SELECT conv.status
+          FROM conversations conv
+          WHERE conv.phone = c.phone
+            AND conv.status != 'closed'
+          ORDER BY conv.id DESC
+          LIMIT 1
+        ) as chatStatus
       FROM \`${contactTableName}\` c
       WHERE 1=1 ${userFilter}
         AND (
@@ -96,7 +105,15 @@ exports.getInboxList = async (req, res) => {
          ORDER BY mm2.created_at DESC 
          LIMIT 1) as lastMessage,
         MAX(mm.created_at) as lastMessageTime,
-        0 as unreadCount
+        0 as unreadCount,
+        (
+          SELECT conv.status
+          FROM conversations conv
+          WHERE conv.phone = mm.phone
+            AND conv.status != 'closed'
+          ORDER BY conv.id DESC
+          LIMIT 1
+        ) as chatStatus
       FROM \`${metaMessageTableName}\` mm
       ${agentSeesAll ? '' : 'WHERE NOT EXISTS (SELECT 1 FROM `' + contactTableName + '` c2 WHERE c2.phone = mm.phone AND c2.userId = :userId)'}
       GROUP BY mm.phone
@@ -120,7 +137,8 @@ exports.getInboxList = async (req, res) => {
       whatsappOptInAt: item.whatsappOptInAt || null,
       lastMessage: item.lastMessage || '',
       lastMessageTime: item.lastMessageTime,
-      unreadCount: parseInt(item.unreadCount) || 0
+      unreadCount: parseInt(item.unreadCount) || 0,
+      chatStatus: item.chatStatus || null,
     }));
 
     // Remove duplicates by phone (keep the one with contactId if available)
@@ -324,6 +342,76 @@ exports.sendMessage = async (req, res) => {
       }
     }
 
+    // Enforce opt-in/out before sending
+    const isOptedIn =
+      contact.status !== 'unsubscribed' &&
+      !!contact.whatsappOptInAt;
+
+    if (!isOptedIn) {
+      const message = await Message.create({
+        contactId: contact.id,
+        content: messageText,
+        type: 'outgoing',
+        status: 'failed',
+        errorMessage: 'Blocked (opt-out / not opted-in)',
+        sentAt: new Date()
+      });
+
+      // Also save to InboxMessage so UI shows the attempt
+      let inboxMessage = null;
+      try {
+        inboxMessage = await InboxMessage.create({
+          contactId: contact.id,
+          userId,
+          direction: 'outgoing',
+          message: messageText,
+          type: 'text',
+          status: 'failed',
+          timestamp: new Date()
+        });
+      } catch (inboxError) {
+        console.error('Error saving blocked InboxMessage:', inboxError);
+      }
+
+      await contact.update({
+        lastContacted: new Date()
+      });
+
+      // Emit socket events for real-time UI
+      try {
+        const messageData = {
+          id: inboxMessage?.id || message.id,
+          contactId: contact.id,
+          phone: normalizedPhone,
+          content: messageText,
+          type: 'outgoing',
+          status: message.status,
+          sentAt: message.sentAt ? message.sentAt.toISOString() : new Date().toISOString(),
+          createdAt: message.createdAt ? message.createdAt.toISOString() : new Date().toISOString(),
+          waMessageId: inboxMessage?.waMessageId || null
+        };
+        socketService.emitToContact(contact.id, 'new-message', messageData);
+        socketService.emitToUser(userId, 'inbox-update', { contactId: contact.id });
+      } catch (socketError) {
+        console.error('Error emitting socket (blocked message):', socketError);
+      }
+
+      return res.json({
+        success: true,
+        message: {
+          id: message.id,
+          content: message.content,
+          status: message.status,
+          type: message.type,
+          sentAt: message.sentAt,
+          contactId: contact.id,
+          waMessageId: inboxMessage?.waMessageId || null,
+          is24hWindow: false,
+          messageType: 'text'
+        }
+      });
+    }
+
     // 2️⃣ Check 24-hour window - Look for last inbound message from this contact
     const lastInbound = await InboxMessage.findOne({
       where: {
@@ -377,6 +465,55 @@ exports.sendMessage = async (req, res) => {
     let messageSent = false;
 
     try {
+      // Conversation billing/quota enforcement (24-hour rolling).
+      const billing = await upsertConversationWithQuota(userId, normalizedPhone);
+      if (!billing.allowed) {
+        const errorMessage = 'Blocked (conversation limit reached)';
+
+        // Mark attempt as failed in both tables so UI reflects it.
+        await message.update({ status: 'failed', errorMessage });
+        if (inboxMessage) {
+          await inboxMessage.update({ status: 'failed' });
+        }
+
+        // Update contact lastContacted (keeps existing UX consistent)
+        await contact.update({ lastContacted: new Date() });
+
+        // Emit socket events for real-time UI (same as success path)
+        try {
+          const messageData = {
+            id: inboxMessage?.id || message.id,
+            contactId: contact.id,
+            phone: normalizedPhone,
+            content: messageText,
+            type: 'outgoing',
+            status: 'failed',
+            sentAt: message.sentAt ? message.sentAt.toISOString() : new Date().toISOString(),
+            createdAt: message.createdAt ? message.createdAt.toISOString() : new Date().toISOString(),
+            waMessageId: null,
+          };
+          socketService.emitToContact(contact.id, 'new-message', messageData);
+          socketService.emitToUser(userId, 'inbox-update', { contactId: contact.id });
+        } catch (socketError) {
+          console.error('Error emitting socket (blocked by quota):', socketError);
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: {
+            id: message.id,
+            content: message.content,
+            status: 'failed',
+            type: message.type,
+            sentAt: message.sentAt,
+            contactId: contact.id,
+            waMessageId: null,
+            is24hWindow: is24hOpen,
+            messageType: is24hOpen ? 'text' : 'template',
+          }
+        });
+      }
+
       if (is24hOpen) {
         // ✅ CASE 1: 24-Hour Window OPEN - Send TEXT message
         console.log('🟢 24-hour window OPEN - Sending TEXT message via Meta API');

@@ -17,16 +17,16 @@ const removeToken = () => {
 };
 
 // Register user
-export const register = async (name, email, password) => {
+export const register = async (name, email, password, mobileNumber) => {
   try {
     const headers = { 'Content-Type': 'application/json' };
     if (API_BASE && API_BASE.includes('ngrok')) {
       headers['ngrok-skip-browser-warning'] = 'true';
     }
-    const response = await fetch(`${API_URL}/auth/register`, {
+    const response = await fetch(`${API_URL}/auth/register/request-otp`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify({ name, email, password, mobileNumber }),
     });
 
     const data = await response.json();
@@ -44,6 +44,40 @@ export const register = async (name, email, password) => {
   } catch (error) {
     throw error;
   }
+};
+
+export const verifyRegisterOtp = async (email, otp) => {
+  const headers = { 'Content-Type': 'application/json' };
+  if (API_BASE && API_BASE.includes('ngrok')) {
+    headers['ngrok-skip-browser-warning'] = 'true';
+  }
+  const response = await fetch(`${API_URL}/auth/register/verify-otp`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ email, otp }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || 'OTP verification failed');
+  }
+  return data;
+};
+
+export const resendRegisterOtp = async (email) => {
+  const headers = { 'Content-Type': 'application/json' };
+  if (API_BASE && API_BASE.includes('ngrok')) {
+    headers['ngrok-skip-browser-warning'] = 'true';
+  }
+  const response = await fetch(`${API_URL}/auth/register/resend-otp`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ email }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || 'Resend OTP failed');
+  }
+  return data;
 };
 
 // Login user

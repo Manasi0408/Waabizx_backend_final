@@ -1,5 +1,6 @@
 const { sequelize, Campaign, Contact, Message, User, InboxMessage } = require('../models');
 const { Op } = require('sequelize');
+const { upsertConversationWithQuota, getUsedConversations, ensureAccountExists } = require('../services/conversationBillingService');
 
 exports.getDashboardStats = async (req, res) => {
   try {
@@ -383,3 +384,48 @@ function formatTimeAgo(date) {
     return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
   }
 }
+
+// WhatsApp conversation-based quota (24-hour rolling).
+// Matches the Meta concept: charge per conversation session, not per message.
+exports.getConversationQuota = async (req, res) => {
+  try {
+    const accountId = Number(req.params.accountId);
+    if (!accountId || Number.isNaN(accountId)) {
+      return res.status(400).json({ success: false, message: 'Invalid account id' });
+    }
+
+    const { limit, name: accountName } = await ensureAccountExists(accountId);
+    const used = await getUsedConversations(accountId);
+
+    // Per-message metric: outbound rows today (calendar day, server local midnight)
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const messagesSentToday = await InboxMessage.count({
+      where: {
+        userId: accountId,
+        direction: 'outgoing',
+        timestamp: { [Op.gte]: todayStart },
+      },
+    });
+
+    const limitNum = Number(limit) || 0;
+    const sentTodayNum = Number(messagesSentToday) || 0;
+    // Remaining shown in UI: sends left today under the same cap as `limit`
+    const remaining = Math.max(0, limitNum - sentTodayNum);
+
+    res.json({
+      success: true,
+      used,
+      remaining,
+      limit,
+      messagesSentToday,
+      accountName,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+    });
+  }
+};

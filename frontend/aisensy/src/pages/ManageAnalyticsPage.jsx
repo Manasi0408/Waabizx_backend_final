@@ -75,34 +75,34 @@ export default function ManageAnalyticsPage() {
   const showAgentArea = (key) => agentFilter === "all" || agentFilter === key;
 
   return (
-    <div className="p-4 md:p-6">
-      <div className="mb-4">
-        <h2 className="text-lg md:text-xl font-semibold text-gray-900">Analytics</h2>
-        <p className="text-sm text-gray-500">Charts update automatically with live data.</p>
+    <div className="p-4 md:p-6 lg:p-8">
+      <div className="mb-5 motion-enter">
+        <h2 className="text-xl md:text-2xl font-bold text-gray-900 tracking-tight">Analytics</h2>
+        <p className="text-sm text-gray-600 mt-1">Charts update automatically with live data.</p>
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 text-sm text-red-700 rounded-lg">
+        <div className="mb-4 p-4 bg-red-50 border border-red-200/90 text-sm text-red-700 rounded-xl ring-1 ring-red-100/50 motion-enter">
           {error}
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4">
+      <div className="grid grid-cols-1 gap-5 md:gap-6">
         {/* Chart 1 */}
-        <div className="bg-white border border-gray-200 rounded-xl p-4 md:p-6">
-          <div className="flex items-start justify-between gap-4 mb-3">
+        <div className="motion-enter motion-delay-1 motion-hover-lift bg-white/95 backdrop-blur-sm border border-gray-100/90 rounded-2xl p-4 md:p-6 shadow-lg shadow-gray-200/35 ring-1 ring-gray-100/80 transition-all duration-300 hover:shadow-xl">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-4">
             <div>
-              <h3 className="text-sm md:text-base font-semibold text-gray-800">Chats sent over time</h3>
-              <div className="text-xs text-gray-500 mt-1">
+              <h3 className="text-sm md:text-base font-bold text-gray-900">Chats sent over time</h3>
+              <div className="text-xs text-gray-600 mt-1">
                 Sent / Delivered / Read
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">Range</span>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs font-medium text-gray-500">Range</span>
               <select
                 value={days}
                 onChange={(e) => setDays(Number(e.target.value))}
-                className="text-xs bg-gray-50 border border-gray-200 rounded-lg px-2 py-1"
+                className="text-xs bg-gray-50/90 border-2 border-gray-200 rounded-xl px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-400/40 focus:border-sky-400 transition-all"
               >
                 <option value={7}>Last 7 days</option>
                 <option value={30}>Last 30 days</option>
@@ -113,7 +113,10 @@ export default function ManageAnalyticsPage() {
 
           <div className="h-[240px] w-full">
             {loading ? (
-              <div className="h-full flex items-center justify-center text-sm text-gray-500">Loading...</div>
+              <div className="h-full flex flex-col items-center justify-center text-sm text-gray-600 motion-enter">
+                <div className="h-8 w-8 animate-spin rounded-full border-2 border-sky-200 border-t-sky-600 mb-2" />
+                Loading...
+              </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={dashboardChartData || []} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
@@ -127,8 +130,8 @@ export default function ManageAnalyticsPage() {
                     type="monotone"
                     dataKey="messages"
                     name="Messages Sent"
-                    stroke="#3B82F6"
-                    fill="#3B82F6"
+                    stroke="#0EA5E9"
+                    fill="#0EA5E9"
                     fillOpacity={0.18}
                     strokeWidth={2}
                   />
@@ -157,20 +160,20 @@ export default function ManageAnalyticsPage() {
         </div>
 
         {/* Chart 2 */}
-        <div className="bg-white border border-gray-200 rounded-xl p-4 md:p-6">
-          <div className="flex items-start justify-between gap-4 mb-3">
+        <div className="motion-enter motion-delay-2 motion-hover-lift bg-white/95 backdrop-blur-sm border border-gray-100/90 rounded-2xl p-4 md:p-6 shadow-lg shadow-gray-200/35 ring-1 ring-gray-100/80 transition-all duration-300 hover:shadow-xl">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-4">
             <div>
-              <h3 className="text-sm md:text-base font-semibold text-gray-800">Agent Activity [year]</h3>
-              <div className="text-xs text-gray-500 mt-1">
+              <h3 className="text-sm md:text-base font-bold text-gray-900">Agent Activity [year]</h3>
+              <div className="text-xs text-gray-600 mt-1">
                 Active / Requesting / Intervened / Closed
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">Filter</span>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs font-medium text-gray-500">Filter</span>
               <select
                 value={agentFilter}
                 onChange={(e) => setAgentFilter(e.target.value)}
-                className="text-xs bg-gray-50 border border-gray-200 rounded-lg px-2 py-1"
+                className="text-xs bg-gray-50/90 border-2 border-gray-200 rounded-xl px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-400/40 focus:border-sky-400 transition-all"
               >
                 <option value="all">All</option>
                 <option value="active">Active</option>
@@ -181,28 +184,31 @@ export default function ManageAnalyticsPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3 text-xs">
-            <div className="bg-gray-50 rounded-lg px-3 py-2">
-              <div className="text-gray-500">Total Active</div>
-              <div className="font-semibold text-gray-800">{agentTotals.active}</div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-xs motion-stagger-children">
+            <div className="bg-gradient-to-br from-sky-50/90 to-white rounded-xl px-3 py-2.5 border border-sky-100/70 shadow-sm ring-1 ring-sky-50/80">
+              <div className="text-gray-500 font-medium">Total Active</div>
+              <div className="font-bold text-gray-900 text-sm mt-0.5">{agentTotals.active}</div>
             </div>
-            <div className="bg-gray-50 rounded-lg px-3 py-2">
-              <div className="text-gray-500">Total Requesting</div>
-              <div className="font-semibold text-gray-800">{agentTotals.requesting}</div>
+            <div className="bg-gradient-to-br from-amber-50/80 to-white rounded-xl px-3 py-2.5 border border-amber-100/70 shadow-sm">
+              <div className="text-gray-500 font-medium">Total Requesting</div>
+              <div className="font-bold text-gray-900 text-sm mt-0.5">{agentTotals.requesting}</div>
             </div>
-            <div className="bg-gray-50 rounded-lg px-3 py-2">
-              <div className="text-gray-500">Total Intervened</div>
-              <div className="font-semibold text-gray-800">{agentTotals.intervened}</div>
+            <div className="bg-gradient-to-br from-orange-50/80 to-white rounded-xl px-3 py-2.5 border border-orange-100/70 shadow-sm">
+              <div className="text-gray-500 font-medium">Total Intervened</div>
+              <div className="font-bold text-gray-900 text-sm mt-0.5">{agentTotals.intervened}</div>
             </div>
-            <div className="bg-gray-50 rounded-lg px-3 py-2">
-              <div className="text-gray-500">Total Closed</div>
-              <div className="font-semibold text-gray-800">{agentTotals.closed}</div>
+            <div className="bg-gradient-to-br from-red-50/70 to-white rounded-xl px-3 py-2.5 border border-red-100/70 shadow-sm">
+              <div className="text-gray-500 font-medium">Total Closed</div>
+              <div className="font-bold text-gray-900 text-sm mt-0.5">{agentTotals.closed}</div>
             </div>
           </div>
 
           <div className="h-[240px] w-full">
             {loading ? (
-              <div className="h-full flex items-center justify-center text-sm text-gray-500">Loading...</div>
+              <div className="h-full flex flex-col items-center justify-center text-sm text-gray-600 motion-enter">
+                <div className="h-8 w-8 animate-spin rounded-full border-2 border-sky-200 border-t-sky-600 mb-2" />
+                Loading...
+              </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={agentActivityData || []} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>

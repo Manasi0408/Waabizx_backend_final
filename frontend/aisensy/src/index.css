@@ -45,7 +45,645 @@ code {
   animation: fade-in 0.3s ease-out;
 }
 
-/* Scroll without showing a track (main app teal sidebar nav) */
+/* —— UI motion (respects prefers-reduced-motion) —— */
+@keyframes scale-in-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes float-blob {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(8px, -12px) scale(1.03);
+  }
+  66% {
+    transform: translate(-6px, 6px) scale(0.98);
+  }
+}
+
+@keyframes shimmer-sweep {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.35;
+  }
+  100% {
+    transform: translateX(200%);
+    opacity: 0;
+  }
+}
+
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* Auth pages — continuous left-panel motion (AiSensy) */
+@keyframes auth-orbit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes auth-marquee-scroll {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+@keyframes auth-brand-glow-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 rgba(56, 189, 248, 0.2),
+      inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  }
+  50% {
+    box-shadow:
+      0 0 20px 2px rgba(56, 189, 248, 0.15),
+      inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  }
+}
+
+@keyframes auth-shimmer-bar {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+/* Auth inbox preview — WhatsApp-style live motion */
+@keyframes auth-inbox-breathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.92;
+  }
+  50% {
+    transform: translateY(-3px) scale(1.02);
+    opacity: 1;
+  }
+}
+
+@keyframes auth-inbox-dot-bounce {
+  0%,
+  70%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  35% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
+}
+
+@keyframes auth-inbox-meter {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes auth-inbox-live-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 14px 3px rgba(52, 211, 153, 0.18);
+  }
+}
+
+@keyframes auth-inbox-shimmer-sweep {
+  0% {
+    transform: translateX(-120%) skewX(-12deg);
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.2;
+  }
+  100% {
+    transform: translateX(220%) skewX(-12deg);
+    opacity: 0;
+  }
+}
+
+@keyframes auth-inbox-glow-line {
+  0%,
+  100% {
+    opacity: 0.35;
+    filter: blur(6px);
+  }
+  50% {
+    opacity: 0.85;
+    filter: blur(4px);
+  }
+}
+
+@keyframes stagger-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes soft-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes card-shine-pass {
+  0% {
+    transform: translateX(-130%) skewX(-11deg);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.65;
+  }
+  100% {
+    transform: translateX(260%) skewX(-11deg);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .motion-header-enter {
+    animation: fade-in-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .motion-hero-enter {
+    animation: fade-in-up 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .motion-hero-blob-a {
+    animation: float-blob 14s ease-in-out infinite;
+  }
+
+  .motion-hero-blob-b {
+    animation: float-blob 18s ease-in-out infinite reverse;
+  }
+
+  .motion-hero-shimmer {
+    animation: shimmer-sweep 4s ease-in-out infinite;
+  }
+
+  .motion-enter {
+    animation: fade-in-up 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .motion-enter-slide {
+    animation: slide-in-left 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .motion-delay-1 {
+    animation-delay: 0.07s;
+  }
+  .motion-delay-2 {
+    animation-delay: 0.14s;
+  }
+  .motion-delay-3 {
+    animation-delay: 0.21s;
+  }
+  .motion-delay-4 {
+    animation-delay: 0.28s;
+  }
+  .motion-delay-5 {
+    animation-delay: 0.38s;
+  }
+  .motion-delay-6 {
+    animation-delay: 0.48s;
+  }
+  .motion-delay-7 {
+    animation-delay: 0.56s;
+  }
+
+  .motion-pop {
+    animation: scale-in-pop 0.32s cubic-bezier(0.34, 1.3, 0.64, 1) both;
+  }
+
+  .motion-gradient-text {
+    background-size: 200% auto;
+    animation: gradient-shift 5s ease infinite;
+  }
+
+  .sidebar-nav-stagger > li:nth-child(1) {
+    animation: fade-in-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.02s both;
+  }
+  .sidebar-nav-stagger > li:nth-child(2) {
+    animation: fade-in-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.06s both;
+  }
+  .sidebar-nav-stagger > li:nth-child(3) {
+    animation: fade-in-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;
+  }
+  .sidebar-nav-stagger > li:nth-child(4) {
+    animation: fade-in-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.14s both;
+  }
+  .sidebar-nav-stagger > li:nth-child(5) {
+    animation: fade-in-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.18s both;
+  }
+  .sidebar-nav-stagger > li:nth-child(6) {
+    animation: fade-in-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.22s both;
+  }
+  .sidebar-nav-stagger > li:nth-child(7) {
+    animation: fade-in-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.26s both;
+  }
+  .sidebar-nav-stagger > li:nth-child(8) {
+    animation: fade-in-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.3s both;
+  }
+  .sidebar-nav-stagger > li:nth-child(9) {
+    animation: fade-in-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.34s both;
+  }
+  .sidebar-nav-stagger > li:nth-child(10) {
+    animation: fade-in-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.38s both;
+  }
+
+  .manage-menu-stagger > button:nth-child(1) {
+    animation: fade-in-up 0.38s cubic-bezier(0.22, 1, 0.36, 1) 0.04s both;
+  }
+  .manage-menu-stagger > button:nth-child(2) {
+    animation: fade-in-up 0.38s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;
+  }
+  .manage-menu-stagger > button:nth-child(3) {
+    animation: fade-in-up 0.38s cubic-bezier(0.22, 1, 0.36, 1) 0.16s both;
+  }
+  .manage-menu-stagger > button:nth-child(4) {
+    animation: fade-in-up 0.38s cubic-bezier(0.22, 1, 0.36, 1) 0.22s both;
+  }
+
+  .motion-hover-lift {
+    transition:
+      transform 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 0.3s ease;
+  }
+  .motion-hover-lift:hover {
+    transform: translateY(-4px);
+  }
+
+  /* Staggered entrance for grids / lists (direct children) */
+  .motion-stagger-children > * {
+    animation: stagger-fade-up 0.58s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .motion-stagger-children > *:nth-child(1) {
+    animation-delay: 0.04s;
+  }
+  .motion-stagger-children > *:nth-child(2) {
+    animation-delay: 0.09s;
+  }
+  .motion-stagger-children > *:nth-child(3) {
+    animation-delay: 0.14s;
+  }
+  .motion-stagger-children > *:nth-child(4) {
+    animation-delay: 0.19s;
+  }
+  .motion-stagger-children > *:nth-child(5) {
+    animation-delay: 0.24s;
+  }
+  .motion-stagger-children > *:nth-child(6) {
+    animation-delay: 0.29s;
+  }
+  .motion-stagger-children > *:nth-child(7) {
+    animation-delay: 0.34s;
+  }
+  .motion-stagger-children > *:nth-child(8) {
+    animation-delay: 0.39s;
+  }
+  .motion-stagger-children > *:nth-child(9) {
+    animation-delay: 0.44s;
+  }
+  .motion-stagger-children > *:nth-child(10) {
+    animation-delay: 0.49s;
+  }
+  .motion-stagger-children > *:nth-child(11) {
+    animation-delay: 0.54s;
+  }
+  .motion-stagger-children > *:nth-child(12) {
+    animation-delay: 0.59s;
+  }
+  .motion-stagger-children > *:nth-child(13) {
+    animation-delay: 0.64s;
+  }
+  .motion-stagger-children > *:nth-child(14) {
+    animation-delay: 0.69s;
+  }
+  .motion-stagger-children > *:nth-child(15) {
+    animation-delay: 0.74s;
+  }
+  .motion-stagger-children > *:nth-child(16) {
+    animation-delay: 0.79s;
+  }
+  .motion-stagger-children > *:nth-child(17) {
+    animation-delay: 0.84s;
+  }
+  .motion-stagger-children > *:nth-child(18) {
+    animation-delay: 0.89s;
+  }
+  .motion-stagger-children > *:nth-child(19) {
+    animation-delay: 0.94s;
+  }
+  .motion-stagger-children > *:nth-child(20) {
+    animation-delay: 0.99s;
+  }
+
+  /* Ambient blobs for page backgrounds (pair with Tailwind absolute + size + bg) */
+  .motion-page-blob {
+    border-radius: 50%;
+    filter: blur(56px);
+    pointer-events: none;
+    animation: soft-pulse 8s ease-in-out infinite;
+  }
+  .motion-page-blob--b {
+    animation-delay: -4s;
+    animation-duration: 11s;
+  }
+
+  .motion-icon-spin-hover {
+    transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .group:hover .motion-icon-spin-hover {
+    transform: rotate(-8deg) scale(1.08);
+  }
+
+  /* Glossy interactive card: sky accent + one-shot shine on hover */
+  .motion-card-rich {
+    position: relative;
+    overflow: hidden;
+  }
+  .motion-card-rich::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.75rem;
+    bottom: 0.75rem;
+    width: 3px;
+    border-radius: 9999px;
+    background: linear-gradient(180deg, #bae6fd 0%, #38bdf8 40%, #2563eb 100%);
+    opacity: 0;
+    transform: scaleY(0.45);
+    transform-origin: center center;
+    transition:
+      opacity 0.4s ease,
+      transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+    pointer-events: none;
+    z-index: 1;
+    box-shadow: 0 0 18px rgba(56, 189, 248, 0.35);
+  }
+  .motion-card-rich:hover::before,
+  .motion-card-rich:focus-visible::before {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+
+  .motion-card-rich.motion-hover-lift:hover,
+  .motion-card-rich.motion-hover-lift:focus-visible {
+    transform: translateY(-6px) scale(1.012);
+    box-shadow:
+      0 22px 44px -12px rgba(14, 165, 233, 0.18),
+      0 12px 28px -8px rgba(15, 23, 42, 0.12);
+  }
+
+  .motion-avatar-breathe {
+    transition:
+      transform 0.55s cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 0.45s ease,
+      border-color 0.35s ease;
+  }
+  .group:hover .motion-avatar-breathe,
+  .group:focus-visible .motion-avatar-breathe {
+    transform: scale(1.08);
+    box-shadow: 0 8px 24px -6px rgba(14, 165, 233, 0.35);
+  }
+
+  /* Shine sweep layer (child of .motion-card-rich) */
+  .motion-card-shine {
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border-radius: inherit;
+    z-index: 1;
+  }
+  .motion-card-shine__beam {
+    position: absolute;
+    top: -10%;
+    bottom: -10%;
+    left: 0;
+    width: 55%;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.55) 45%,
+      rgba(255, 255, 255, 0.2) 55%,
+      transparent 100%
+    );
+    transform: translateX(-140%) skewX(-11deg);
+    opacity: 0;
+  }
+  .group:hover .motion-card-shine__beam,
+  .group:focus-visible .motion-card-shine__beam {
+    animation: card-shine-pass 0.95s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  .auth-left-ambient-orb {
+    animation: float-blob 18s ease-in-out infinite;
+  }
+
+  .auth-logo-orbit-ring {
+    animation: auth-orbit-spin 16s linear infinite;
+  }
+
+  .auth-logo-orbit-ring--reverse {
+    animation: auth-orbit-spin 22s linear infinite reverse;
+  }
+
+  .auth-brand-logo-pulse {
+    animation: auth-brand-glow-pulse 3s ease-in-out infinite;
+  }
+
+  .auth-marquee-row {
+    display: flex;
+    width: max-content;
+    gap: 1.25rem;
+    animation: auth-marquee-scroll 32s linear infinite;
+    will-change: transform;
+  }
+
+  .auth-marquee-sheen {
+    background: linear-gradient(
+      105deg,
+      rgba(255, 255, 255, 0.04) 0%,
+      rgba(255, 255, 255, 0.12) 45%,
+      rgba(56, 189, 248, 0.08) 55%,
+      rgba(255, 255, 255, 0.04) 100%
+    );
+    background-size: 200% 100%;
+    animation: auth-shimmer-bar 5s ease-in-out infinite;
+  }
+
+  .auth-inbox-bubble-a {
+    animation: auth-inbox-breathe 2.6s ease-in-out infinite;
+  }
+
+  .auth-inbox-bubble-b {
+    animation: auth-inbox-breathe 3s ease-in-out infinite;
+    animation-delay: 0.35s;
+  }
+
+  .auth-inbox-dot:nth-child(1) {
+    animation: auth-inbox-dot-bounce 1.05s ease-in-out infinite;
+  }
+  .auth-inbox-dot:nth-child(2) {
+    animation: auth-inbox-dot-bounce 1.05s ease-in-out infinite;
+    animation-delay: 0.14s;
+  }
+  .auth-inbox-dot:nth-child(3) {
+    animation: auth-inbox-dot-bounce 1.05s ease-in-out infinite;
+    animation-delay: 0.28s;
+  }
+
+  .auth-inbox-meter-bar {
+    transform-origin: bottom center;
+    animation: auth-inbox-meter 1.15s ease-in-out infinite;
+  }
+
+  .auth-inbox-meter-bar:nth-child(1) {
+    animation-delay: 0ms;
+  }
+  .auth-inbox-meter-bar:nth-child(2) {
+    animation-delay: 120ms;
+  }
+  .auth-inbox-meter-bar:nth-child(3) {
+    animation-delay: 240ms;
+  }
+  .auth-inbox-meter-bar:nth-child(4) {
+    animation-delay: 180ms;
+  }
+  .auth-inbox-meter-bar:nth-child(5) {
+    animation-delay: 60ms;
+  }
+
+  .auth-inbox-live-pill {
+    animation: auth-inbox-live-glow 2.2s ease-in-out infinite;
+  }
+
+  .auth-inbox-shimmer-beam {
+    animation: auth-inbox-shimmer-sweep 3.5s ease-in-out infinite;
+  }
+
+  .auth-inbox-top-glow {
+    animation: auth-inbox-glow-line 2.8s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-header-enter,
+  .motion-hero-enter,
+  .motion-hero-blob-a,
+  .motion-hero-blob-b,
+  .motion-hero-shimmer,
+  .motion-enter,
+  .motion-enter-slide,
+  .motion-pop,
+  .motion-gradient-text,
+  .sidebar-nav-stagger > li,
+  .manage-menu-stagger > button {
+    animation: none !important;
+    animation-delay: 0s !important;
+  }
+  .motion-stagger-children > * {
+    animation: none !important;
+    animation-delay: 0s !important;
+  }
+  .motion-page-blob,
+  .motion-page-blob--b {
+    animation: none !important;
+  }
+  .motion-hover-lift:hover {
+    transform: none;
+  }
+  .motion-card-rich::before {
+    display: none !important;
+  }
+  .group:hover .motion-avatar-breathe,
+  .group:focus-visible .motion-avatar-breathe {
+    transform: none;
+    box-shadow: none;
+  }
+  .group:hover .motion-card-shine__beam,
+  .group:focus-visible .motion-card-shine__beam {
+    animation: none !important;
+  }
+
+  .auth-left-ambient-orb,
+  .auth-logo-orbit-ring,
+  .auth-logo-orbit-ring--reverse,
+  .auth-brand-logo-pulse,
+  .auth-marquee-row,
+  .auth-marquee-sheen {
+    animation: none !important;
+  }
+
+  .auth-inbox-bubble-a,
+  .auth-inbox-bubble-b,
+  .auth-inbox-dot,
+  .auth-inbox-meter-bar,
+  .auth-inbox-live-pill,
+  .auth-inbox-shimmer-beam,
+  .auth-inbox-top-glow {
+    animation: none !important;
+  }
+}
+
+/* Scroll without showing a track (main app sidebar nav) */
 @layer utilities {
   .scrollbar-sidebar-none {
     scrollbar-width: none;

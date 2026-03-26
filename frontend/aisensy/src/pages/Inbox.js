@@ -515,6 +515,16 @@ function Inbox() {
       }
       const data = await getInboxList();
       console.log('Inbox list fetched:', data?.length || 0, 'contacts');
+
+      // Persist intervene state from backend chat status across refresh/navigation.
+      const nextIntervened = {};
+      (data || []).forEach((item) => {
+        const status = String(item?.chatStatus || '').toLowerCase();
+        if (status === 'intervened' && item?.phone) {
+          nextIntervened[item.phone] = true;
+        }
+      });
+      setIntervenedPhones(nextIntervened);
       
       // Only update state if data actually changed (prevent unnecessary re-renders)
       setInboxList(prev => {
@@ -885,12 +895,72 @@ function Inbox() {
         
         // Convert map to array
         const uniqueMessages = Array.from(messageMap.values());
+
+        // Final strict dedupe pass across ALL sources to prevent
+        // message/message+inbox_message+webhook triplicates in UI.
+        const sourcePriority = (msg) => {
+          if (msg.waMessageId) return 1;
+          if (!msg.source || msg.source === 'message' || msg.source === 'socket') return 2;
+          if (msg.source === 'inbox_message') return 3;
+          if (msg.source === 'meta_message') return 4;
+          if (msg.source === 'webhook_log') return 5;
+          if (msg.source === 'optimistic' || msg.isOptimistic) return 6;
+          return 7;
+        };
+
+        const finalMessages = [];
+        for (const msg of uniqueMessages) {
+          const msgTimestamp = new Date(msg.sentAt || msg.createdAt || 0).getTime();
+          const msgContent = normalizeContent(msg.content);
+          const msgType = String(msg.type || '');
+          const msgContactId = String(msg.contactId || '');
+          const msgPhone = normalizePhone(msg.phone || selectedContact?.phone || '');
+
+          const duplicateIdx = finalMessages.findIndex((existing) => {
+            // Exact WA ID match is always duplicate.
+            if (existing.waMessageId && msg.waMessageId && existing.waMessageId === msg.waMessageId) {
+              return true;
+            }
+
+            const exTimestamp = new Date(existing.sentAt || existing.createdAt || 0).getTime();
+            const exContent = normalizeContent(existing.content);
+            const exType = String(existing.type || '');
+            const exContactId = String(existing.contactId || '');
+            const exPhone = normalizePhone(existing.phone || selectedContact?.phone || '');
+
+            if (exType !== msgType) return false;
+            if (exContent !== msgContent) return false;
+
+            const sameContact =
+              (exContactId && msgContactId && exContactId === msgContactId) ||
+              (exPhone && msgPhone && exPhone === msgPhone);
+            if (!sameContact) return false;
+
+            // Same message arriving from different sources usually lands within a few seconds.
+            return Math.abs(exTimestamp - msgTimestamp) <= 5000;
+          });
+
+          if (duplicateIdx === -1) {
+            finalMessages.push(msg);
+          } else {
+            const existing = finalMessages[duplicateIdx];
+            if (sourcePriority(msg) < sourcePriority(existing)) {
+              finalMessages[duplicateIdx] = msg;
+            }
+          }
+        }
+
+        finalMessages.sort((a, b) => {
+          const dateA = new Date(a.sentAt || a.createdAt || 0);
+          const dateB = new Date(b.sentAt || b.createdAt || 0);
+          return dateA - dateB;
+        });
         
-        console.log('Final merged messages count:', uniqueMessages.length, 'Optimistic:', optimisticMessages.length, 'All messages:', allMessages.length);
+        console.log('Final merged messages count:', finalMessages.length, 'Optimistic:', optimisticMessages.length, 'All messages:', allMessages.length);
         
         // Always update state with the new messages (even if empty)
         // This ensures loading state is cleared and UI shows "No messages" if needed
-        return uniqueMessages;
+        return finalMessages;
       });
       
       // Mark messages as read (only if contact exists)
@@ -1186,12 +1256,41 @@ function Inbox() {
     });
   };
 
+  // Resolve template placeholders like {{1}}, {{2}} to contact-specific values.
+  const resolveTemplatePlaceholders = (rawText, contact) => {
+    const text = String(rawText || "");
+    if (!text.includes('{{')) return text;
+
+    const phone = String(contact?.phone || '').trim();
+    const normalizedPhone = phone.replace(/^\+/, '');
+    const contactName = String(contact?.name || '').trim();
+    const email = String(contact?.email || '').trim();
+
+    const defaultName = contactName && contactName !== phone ? contactName : (normalizedPhone || 'Customer');
+
+    const valueMap = {
+      1: defaultName,
+      2: normalizedPhone || defaultName,
+      3: email || defaultName,
+      4: normalizedPhone ? normalizedPhone.slice(-4) : defaultName,
+    };
+
+    return text.replace(/\{\{\s*(\d+)\s*\}\}/g, (full, idxRaw) => {
+      const idx = Number(idxRaw);
+      if (!Number.isFinite(idx)) return full;
+      const mapped = valueMap[idx];
+      if (mapped && String(mapped).trim()) return String(mapped);
+      return defaultName;
+    });
+  };
+
   const sendInterveneQuickItem = async (insertValue) => {
     setInterveneQuickPickerOpen(false);
     setSelectedInterveneCannedId("");
     setSelectedInterveneTemplateId("");
     try {
-      await handleSendMessage(null, insertValue);
+      const resolvedText = resolveTemplatePlaceholders(insertValue, selectedContact);
+      await handleSendMessage(null, resolvedText);
     } catch (e) {
       // handleSendMessage already alerts/optimistic-updates; keep UI stable
       setInterveneQuickPickerOpen(false);
@@ -1262,7 +1361,10 @@ function Inbox() {
 
   useEffect(() => {
     const phone = selectedContact?.phone;
-    const isIntervened = phone && intervenedPhones[phone];
+    const isIntervened =
+      !!phone &&
+      (intervenedPhones[phone] ||
+        String(selectedContact?.chatStatus || '').toLowerCase() === 'intervened');
     if (!phone || !isIntervened) return;
     if (interveneOptionsLoadedRef.current) return;
     fetchInterveneInsertOptions();
@@ -1327,7 +1429,10 @@ function Inbox() {
       const response = await sendTemplateMessage(phone, templateName, templateLanguage, templateParams);
       
       // Get template content for display
-      const templateContent = template.content || `Template: ${templateName}`;
+      const templateContent = resolveTemplatePlaceholders(
+        template.content || `Template: ${templateName}`,
+        selectedContact
+      );
       
       // Add template message to chat immediately (optimistic update)
       const templateMessage = {
@@ -1720,9 +1825,9 @@ function Inbox() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+      <div className="min-h-screen bg-gradient-to-b from-sky-50/90 via-white to-sky-100/50 flex items-center justify-center">
+        <div className="text-center motion-enter">
+          <div className="animate-spin rounded-full h-12 w-12 border-2 border-sky-200 border-t-sky-600 mx-auto" />
           <p className="mt-4 text-gray-600">Loading...</p>
         </div>
       </div>
@@ -1736,10 +1841,10 @@ function Inbox() {
     <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
       {/* Intervention popup for admin when agent clicks Intervene */}
       {interventionAlert && isAdminOrManager && (
-        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-[9999] px-6 py-4 bg-teal-700 text-white rounded-lg shadow-lg flex items-center gap-3 min-w-[320px] max-w-md">
+        <div className="motion-enter fixed top-4 left-1/2 transform -translate-x-1/2 z-[9999] px-5 py-4 md:px-6 bg-gradient-to-r from-sky-600 via-sky-600 to-blue-700 text-white rounded-2xl shadow-xl shadow-sky-900/25 ring-1 ring-white/20 flex items-center gap-3 min-w-[320px] max-w-md backdrop-blur-sm">
           <span className="font-semibold shrink-0">Intervention</span>
-          <span>
-            <strong>{interventionAlert.agentName}</strong> intervened
+          <span className="text-sm text-sky-50">
+            <strong className="text-white">{interventionAlert.agentName}</strong> intervened
             {interventionAlert.dateTime && (
               <> at {new Date(interventionAlert.dateTime).toLocaleString()}</>
             )}
@@ -1748,7 +1853,7 @@ function Inbox() {
           <button
             type="button"
             onClick={() => setInterventionAlert(null)}
-            className="ml-auto p-1 rounded hover:bg-teal-600"
+            className="ml-auto p-2 rounded-xl hover:bg-white/15 active:scale-95 transition-all duration-200"
             aria-label="Dismiss"
           >
             ×
@@ -1757,46 +1862,50 @@ function Inbox() {
       )}
 
       {/* Top Navigation Bar */}
-      <header className="shrink-0 bg-white border-b border-gray-200 px-4 md:px-6 py-4 flex justify-between items-center shadow-sm">
-        <div className="flex items-center gap-4">
+      <header className="motion-header-enter shrink-0 z-10 bg-white/90 backdrop-blur-md border-b border-gray-200/80 px-4 md:px-8 py-3.5 md:py-4 flex justify-between items-center shadow-sm shadow-gray-200/50">
+        <div className="flex items-center gap-4 min-w-0">
           <button
+            type="button"
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="p-2 rounded-lg hover:bg-gray-100 transition lg:hidden"
+            className="p-2.5 rounded-xl hover:bg-gray-100/80 active:scale-95 transition lg:hidden"
+            aria-label="Toggle sidebar"
           >
             <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-          
-          <Link to="/dashboard" className="flex items-center gap-3 hover:opacity-80 transition">
-            <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-blue-800 rounded-lg flex items-center justify-center">
+
+          <Link to="/dashboard" className="flex items-center gap-3 transition-all duration-300 hover:opacity-90 hover:scale-[1.02] active:scale-[0.98] shrink-0">
+            <div className="w-10 h-10 bg-gradient-to-br from-sky-500 via-sky-600 to-blue-900 rounded-xl flex items-center justify-center shadow-lg shadow-sky-500/30 ring-2 ring-white">
               <span className="text-white font-bold text-lg">A</span>
             </div>
-            <h1 className="text-xl md:text-2xl font-bold text-gray-800 hidden sm:block">AiSensy</h1>
+            <h1 className="text-xl md:text-2xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent hidden sm:block">
+              AiSensy
+            </h1>
           </Link>
-          
-          <span className="text-gray-400 hidden md:block">|</span>
-          <h2 className="text-lg font-semibold text-gray-600 hidden md:block">Inbox</h2>
+
+          <span className="text-gray-300 hidden md:block shrink-0">|</span>
+          <h2 className="text-lg font-semibold text-sky-700 hidden md:block tracking-tight">Inbox</h2>
         </div>
-        
+
         <div className="flex items-center gap-3 md:gap-4">
-          {/* Notifications */}
           <div className="relative" ref={notificationRef}>
             <button
+              type="button"
               onClick={() => {
                 setNotificationDropdownOpen(!notificationDropdownOpen);
                 if (!notificationDropdownOpen) {
                   fetchNotifications(true);
                 }
               }}
-              className="relative w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center cursor-pointer hover:bg-gray-200 transition focus:outline-none"
+              className="relative w-10 h-10 rounded-full bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200/80 flex items-center justify-center cursor-pointer hover:from-sky-50 hover:to-sky-100/80 hover:border-sky-200/70 hover:shadow-md transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-sky-400/40"
             >
               <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
               </svg>
               {unreadCount > 0 && (
                 <>
-                  <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>
+                  <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white" />
                   <span className="absolute -top-1 -right-1 min-w-[20px] h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center px-1.5 border-2 border-white shadow-sm">
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
@@ -1805,8 +1914,8 @@ function Inbox() {
             </button>
 
             {notificationDropdownOpen && (
-              <div className="absolute right-0 mt-2 w-80 md:w-96 bg-white rounded-lg shadow-xl border border-gray-200 z-50 max-h-[500px] flex flex-col">
-                <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between bg-gray-50">
+              <div className="motion-pop absolute right-0 mt-3 w-80 md:w-96 bg-white rounded-2xl shadow-2xl shadow-gray-900/10 border border-gray-100 z-50 max-h-[500px] flex flex-col overflow-hidden ring-1 ring-black/5 origin-top-right">
+                <div className="px-4 py-3.5 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-slate-50 to-gray-50/80">
                   <div className="flex items-center gap-2">
                     <h3 className="text-sm font-semibold text-gray-800">Notifications</h3>
                     {unreadCount > 0 && (
@@ -1817,11 +1926,12 @@ function Inbox() {
                   </div>
                   {unreadCount > 0 && (
                     <button
+                      type="button"
                       onClick={async () => {
                         await handleMarkAllAsRead();
                         fetchNotifications();
                       }}
-                      className="text-xs text-blue-600 hover:text-blue-700 font-medium transition"
+                      className="text-xs text-sky-600 hover:text-sky-700 font-medium transition"
                     >
                       Mark all as read
                     </button>
@@ -1830,7 +1940,7 @@ function Inbox() {
                 <div className="overflow-y-auto flex-1">
                   {loadingNotifications ? (
                     <div className="px-4 py-8 text-center">
-                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                      <div className="animate-spin rounded-full h-8 w-8 border-2 border-sky-200 border-t-sky-600 mx-auto" />
                       <p className="mt-2 text-sm text-gray-500">Loading notifications...</p>
                     </div>
                   ) : notifications.length === 0 ? (
@@ -1845,22 +1955,28 @@ function Inbox() {
                       {notifications.map((notification) => (
                         <button
                           key={notification.id}
+                          type="button"
                           onClick={() => handleNotificationClick(notification)}
                           className={`w-full px-4 py-3 text-left hover:bg-gray-50 transition border-l-4 ${
-                            !notification.is_read 
-                              ? 'bg-blue-50 border-blue-500' 
+                            !notification.is_read
+                              ? 'bg-sky-50 border-sky-500'
                               : 'bg-white border-transparent'
                           }`}
                         >
                           <div className="flex items-start gap-3">
-                            <div className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${
-                              notification.type === 'campaign' ? 'bg-blue-100' :
-                              notification.type === 'template' ? 'bg-green-100' :
-                              notification.type === 'message' ? 'bg-purple-100' :
-                              'bg-gray-100'
-                            }`}>
+                            <div
+                              className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${
+                                notification.type === 'campaign'
+                                  ? 'bg-sky-100'
+                                  : notification.type === 'template'
+                                    ? 'bg-green-100'
+                                    : notification.type === 'message'
+                                      ? 'bg-purple-100'
+                                      : 'bg-gray-100'
+                              }`}
+                            >
                               {notification.type === 'campaign' && (
-                                <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <svg className="w-5 h-5 text-sky-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                                 </svg>
                               )}
@@ -1883,9 +1999,11 @@ function Inbox() {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start justify-between gap-2">
                                 <div className="flex-1">
-                                  <p className={`text-sm font-medium ${
-                                    !notification.is_read ? 'text-gray-900' : 'text-gray-700'
-                                  }`}>
+                                  <p
+                                    className={`text-sm font-medium ${
+                                      !notification.is_read ? 'text-gray-900' : 'text-gray-700'
+                                    }`}
+                                  >
                                     {notification.title}
                                   </p>
                                   <p className="text-xs text-gray-500 mt-1 line-clamp-2">
@@ -1893,7 +2011,7 @@ function Inbox() {
                                   </p>
                                 </div>
                                 {!notification.is_read && (
-                                  <div className="flex-shrink-0 w-2 h-2 bg-blue-600 rounded-full mt-1"></div>
+                                  <div className="flex-shrink-0 w-2 h-2 bg-sky-600 rounded-full mt-1" />
                                 )}
                               </div>
                               <p className="text-xs text-gray-400 mt-1">
@@ -1913,23 +2031,27 @@ function Inbox() {
           <button
             type="button"
             onClick={() => navigate('/settings')}
-            className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-semibold hover:from-blue-600 hover:to-blue-700 transition shadow-md"
+            className="w-10 h-10 rounded-full bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 flex items-center justify-center cursor-pointer shadow-md shadow-sky-500/35 hover:shadow-lg hover:ring-2 ring-sky-300/60 hover:scale-[1.03] transition-all duration-200 focus:outline-none"
           >
-            {userInitial}
+            <span className="text-white font-semibold text-sm">{userInitial}</span>
           </button>
         </div>
       </header>
 
       <div className="flex flex-1 min-h-0">
         {/* Left Sidebar - Navigation */}
-        <aside className={`${sidebarOpen ? 'w-20' : 'w-0 md:w-20'} h-full shrink-0 flex flex-col bg-teal-900 text-white border-r border-teal-800 transition-all duration-300 overflow-hidden`}>
+        <aside className={`${sidebarOpen ? 'w-20' : 'w-0 md:w-20'} h-full shrink-0 flex flex-col bg-sky-950 text-white border-r border-sky-900 transition-all duration-300 overflow-hidden`}>
           <MainSidebarNav />
         </aside>
 
         {/* Main Inbox Area */}
-        <div className="flex-1 flex overflow-hidden">
+        <div className="relative flex-1 flex min-w-0 overflow-hidden bg-gradient-to-b from-sky-50/90 via-white to-sky-100/50">
+          <div className="pointer-events-none absolute inset-0 overflow-hidden z-0" aria-hidden>
+            <div className="absolute -top-28 -right-16 w-[20rem] h-[20rem] bg-sky-400/25 motion-page-blob" />
+            <div className="absolute bottom-0 -left-20 w-[18rem] h-[18rem] bg-blue-400/20 motion-page-blob motion-page-blob--b" />
+          </div>
           {/* Left Panel - Chat List */}
-          <div className="w-80 border-r border-gray-200 bg-white flex flex-col">
+          <div className="relative z-[1] w-80 border-r border-gray-200/90 bg-white/95 backdrop-blur-sm flex flex-col shadow-sm shadow-gray-200/25 ring-1 ring-gray-100/60">
             {/* Requesting (admin/manager): unassigned conversations — assign to agent */}
             {/* {isAdminOrManager && (
               <div className="border-b border-gray-200 bg-amber-50/80">
@@ -1983,14 +2105,14 @@ function Inbox() {
               </div>
             )} */}
             {/* Search Bar */}
-            <div className="p-4 border-b border-gray-200">
+            <div className="p-4 border-b border-gray-200/80 bg-gradient-to-b from-white to-sky-50/20">
               <div className="relative">
                 <input
                   type="text"
                   placeholder="Search conversations..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                  className="w-full pl-10 pr-4 py-2.5 border-2 border-gray-200 rounded-xl bg-gray-50/80 hover:bg-white focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none transition-all shadow-sm text-sm"
                 />
                 <svg className="absolute left-3 top-2.5 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -2001,30 +2123,33 @@ function Inbox() {
             {/* Chat List */}
             <div className="flex-1 overflow-y-auto">
               {loadingInbox ? (
-                <div className="p-8 text-center">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                <div className="p-8 text-center motion-enter">
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-sky-200 border-t-sky-600 mx-auto" />
                   <p className="mt-2 text-sm text-gray-500">Loading conversations...</p>
                 </div>
               ) : filteredInboxList.length === 0 ? (
-                <div className="p-8 text-center">
-                  <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="p-8 text-center motion-enter">
+                  <svg className="w-16 h-16 text-sky-200 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                   </svg>
                   <p className="text-gray-600 mb-2">No conversations found</p>
                   <p className="text-sm text-gray-500">Start a conversation by sending a message</p>
                 </div>
               ) : (
-                <div className="divide-y divide-gray-100">
+                <div className="motion-stagger-children divide-y divide-gray-100/90">
                   {filteredInboxList.map((contact) => (
                     <button
+                      type="button"
                       key={contact.contactId || `contact_${contact.phone}`}
                       onClick={() => handleContactSelect(contact)}
-                      className={`w-full p-4 text-left hover:bg-gray-50 transition ${
-                        selectedContact?.phone === contact.phone ? 'bg-blue-50 border-l-4 border-blue-600' : ''
+                      className={`w-full p-4 text-left transition-all duration-200 hover:bg-sky-50/60 active:scale-[0.99] ${
+                        selectedContact?.phone === contact.phone
+                          ? 'bg-sky-50/90 border-l-4 border-sky-600 shadow-inner shadow-sky-100/50'
+                          : 'border-l-4 border-transparent'
                       }`}
                     >
                       <div className="flex items-start gap-3">
-                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center flex-shrink-0">
+                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 flex items-center justify-center flex-shrink-0 shadow-md shadow-sky-500/25 ring-2 ring-white">
                           <span className="text-white font-semibold text-lg">
                             {contact.name?.charAt(0).toUpperCase() || contact.phone.charAt(0)}
                           </span>
@@ -2050,7 +2175,7 @@ function Inbox() {
                               </span>
                             )}
                             {contact.unreadCount > 0 && (
-                              <span className="ml-2 px-2 py-0.5 bg-blue-600 text-white text-xs font-semibold rounded-full flex-shrink-0">
+                              <span className="ml-2 px-2 py-0.5 bg-sky-600 text-white text-xs font-semibold rounded-full flex-shrink-0 shadow-sm shadow-sky-600/30">
                                 {contact.unreadCount > 9 ? '9+' : contact.unreadCount}
                               </span>
                             )}
@@ -2065,14 +2190,14 @@ function Inbox() {
           </div>
 
           {/* Right Panel - Chat Window */}
-          <div className="flex-1 flex flex-col bg-gray-50">
+          <div className="relative z-[1] flex-1 flex flex-col min-w-0 bg-sky-50/40 backdrop-blur-[1px]">
             {selectedContact ? (
               <>
                 {/* Chat Header */}
-                <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-                  <div className="flex items-center gap-3 flex-1">
-                    <div className="relative">
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
+                <div className="relative bg-white/95 backdrop-blur-md border-b border-gray-200/80 px-6 py-4 flex items-center justify-between shadow-sm shadow-gray-200/30">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <div className="relative shrink-0">
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 flex items-center justify-center shadow-md shadow-sky-500/25 ring-2 ring-white">
                         <span className="text-white font-semibold">
                           {selectedContact.name?.charAt(0).toUpperCase() || selectedContact.phone.charAt(0)}
                         </span>
@@ -2104,11 +2229,12 @@ function Inbox() {
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     {/* Message search */}
                     <button
+                      type="button"
                       onClick={() => setIsSearching(!isSearching)}
-                      className="p-2 rounded-lg hover:bg-gray-100 transition"
+                      className="p-2 rounded-xl hover:bg-sky-50 text-gray-600 hover:text-sky-700 transition-all duration-200 active:scale-95"
                       title="Search messages"
                     >
                       <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2117,11 +2243,12 @@ function Inbox() {
                     </button>
                     {/* Contact menu */}
                     <button
+                      type="button"
                       onClick={() => {
                         setShowContactMenu(!showContactMenu);
                         setEditingContact(selectedContact);
                       }}
-                      className="p-2 rounded-lg hover:bg-gray-100 transition"
+                      className="p-2 rounded-xl hover:bg-sky-50 text-gray-600 hover:text-sky-700 transition-all duration-200 active:scale-95"
                       title="Contact options"
                     >
                       <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2132,13 +2259,14 @@ function Inbox() {
                   
                   {/* Contact menu dropdown */}
                   {showContactMenu && (
-                    <div className="absolute right-4 top-16 bg-white rounded-lg shadow-xl border border-gray-200 z-50 w-48">
+                    <div className="motion-pop absolute right-4 top-[4.5rem] bg-white rounded-2xl shadow-2xl shadow-gray-900/10 border border-gray-100 z-50 w-48 ring-1 ring-black/5 overflow-hidden">
                       <button
+                        type="button"
                         onClick={() => {
                           setShowContactEditDialog(true);
                           setShowContactMenu(false);
                         }}
-                        className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                        className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-sky-50 flex items-center gap-2 transition-colors"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -2146,6 +2274,7 @@ function Inbox() {
                         Edit Contact
                       </button>
                       <button
+                        type="button"
                         onClick={async () => {
                           try {
                             const history = await getContactHistory(selectedContact.id);
@@ -2156,7 +2285,7 @@ function Inbox() {
                           }
                           setShowContactMenu(false);
                         }}
-                        className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                        className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-sky-50 flex items-center gap-2 transition-colors"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -2169,7 +2298,7 @@ function Inbox() {
 
                 {/* Message search bar */}
                 {isSearching && (
-                  <div className="bg-white border-b border-gray-200 px-6 py-3">
+                  <div className="bg-white/95 backdrop-blur-sm border-b border-gray-200/80 px-6 py-3 shadow-sm">
                     <div className="relative">
                       <input
                         type="text"
@@ -2179,18 +2308,19 @@ function Inbox() {
                           setMessageSearchQuery(e.target.value);
                           handleSearchMessages(e.target.value);
                         }}
-                        className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                        className="w-full pl-10 pr-10 py-2.5 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none bg-gray-50/80 text-sm transition-all"
                       />
                       <svg className="absolute left-3 top-2.5 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                       </svg>
                       <button
+                        type="button"
                         onClick={() => {
                           setIsSearching(false);
                           setMessageSearchQuery('');
                           setSearchResults([]);
                         }}
-                        className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
+                        className="absolute right-3 top-2.5 text-gray-400 hover:text-sky-600 transition-colors rounded-lg p-0.5"
                       >
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -2202,8 +2332,8 @@ function Inbox() {
 
                 {/* Typing indicator */}
                 {typingContacts[selectedContact.id] && (
-                  <div className="bg-white border-b border-gray-200 px-6 py-2">
-                    <p className="text-sm text-gray-500 italic">
+                  <div className="bg-white/90 backdrop-blur-sm border-b border-gray-200/80 px-6 py-2 motion-enter">
+                    <p className="text-sm text-sky-700/80 italic">
                       {selectedContact.name || selectedContact.phone} is typing...
                     </p>
                   </div>
@@ -2212,12 +2342,12 @@ function Inbox() {
                 {/* Messages Area */}
                 <div
                   ref={chatContainerRef}
-                  className="flex-1 overflow-y-auto p-6 space-y-4"
+                  className="flex-1 overflow-y-auto p-4 md:p-6 space-y-0 bg-gradient-to-b from-transparent via-sky-50/20 to-sky-100/30"
                 >
                   {messages.length === 0 ? (
-                    <div className="flex items-center justify-center h-full">
-                      <div className="text-center">
-                        <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className="flex items-center justify-center h-full min-h-[200px]">
+                      <div className="text-center motion-enter">
+                        <svg className="w-16 h-16 text-sky-200 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
                         </svg>
                         <p className="text-gray-600">No messages yet</p>
@@ -2240,7 +2370,7 @@ function Inbox() {
                         return (
                           <div
                             key={messageKey}
-                            className={`flex ${message.type === 'outgoing' ? 'justify-end' : 'justify-start'} group relative`}
+                            className={`flex ${message.type === 'outgoing' ? 'justify-end' : 'justify-start'} group relative mb-3`}
                             onContextMenu={(e) => {
                               e.preventDefault();
                               setSelectedMessage(message.id);
@@ -2248,16 +2378,16 @@ function Inbox() {
                             }}
                           >
                             <div
-                              className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg relative ${
+                              className={`max-w-xs lg:max-w-md px-4 py-2 rounded-2xl relative shadow-sm transition-shadow duration-200 ${
                                 message.type === 'outgoing'
-                                  ? 'bg-blue-600 text-white'
-                                  : 'bg-white text-gray-900 border border-gray-200'
+                                  ? 'bg-gradient-to-br from-sky-600 to-sky-700 text-white shadow-sky-600/25'
+                                  : 'bg-white/95 text-gray-900 border border-gray-200/90 backdrop-blur-sm shadow-gray-200/40'
                               }`}
                             >
                               {/* Reply indicator */}
                               {message.replyToId && (
                                 <div className={`text-xs mb-2 pb-2 border-b ${
-                                  message.type === 'outgoing' ? 'border-blue-400 text-blue-100' : 'border-gray-300 text-gray-500'
+                                  message.type === 'outgoing' ? 'border-sky-400/80 text-sky-100' : 'border-gray-300 text-gray-500'
                                 }`}>
                                   Replying to message
                                 </div>
@@ -2266,7 +2396,7 @@ function Inbox() {
                               {/* Forwarded indicator */}
                               {message.forwardedFrom && (
                                 <div className={`text-xs mb-2 pb-2 border-b ${
-                                  message.type === 'outgoing' ? 'border-blue-400 text-blue-100' : 'border-gray-300 text-gray-500'
+                                  message.type === 'outgoing' ? 'border-sky-400/80 text-sky-100' : 'border-gray-300 text-gray-500'
                                 }`}>
                                   Forwarded
                                 </div>
@@ -2322,7 +2452,7 @@ function Inbox() {
                                       key={button.id}
                                       onClick={() => handleBotButtonClick(button.value, message)}
                                       disabled={sending}
-                                      className="px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold rounded-lg border border-blue-200 shadow-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-md"
+                                      className="px-4 py-2 bg-sky-50 hover:bg-sky-100 text-sky-800 text-xs font-semibold rounded-xl border border-sky-200/80 shadow-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-md"
                                     >
                                       {button.text}
                                     </button>
@@ -2346,7 +2476,7 @@ function Inbox() {
                               )}
 
                               <div className={`flex items-center justify-between gap-2 mt-1 ${
-                                message.type === 'outgoing' ? 'text-blue-100' : 'text-gray-500'
+                                message.type === 'outgoing' ? 'text-sky-100' : 'text-gray-500'
                               }`}>
                                 <p className="text-xs">{formatMessageTime(message.sentAt || message.createdAt)}</p>
                                 <div className="flex items-center gap-1">
@@ -2363,11 +2493,12 @@ function Inbox() {
                                   )}
                                   {/* Message menu button */}
                                   <button
+                                    type="button"
                                     onClick={() => {
                                       setSelectedMessage(message.id);
                                       setShowMessageMenu(showMessageMenu === message.id ? null : message.id);
                                     }}
-                                    className="opacity-0 group-hover:opacity-100 transition p-1 hover:bg-black/10 rounded"
+                                    className="opacity-0 group-hover:opacity-100 transition p-1 hover:bg-black/10 rounded-xl"
                                   >
                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
@@ -2378,23 +2509,25 @@ function Inbox() {
 
                               {/* Message menu */}
                               {showMessageMenu === message.id && (
-                                <div className="absolute right-0 top-full mt-1 bg-white rounded-lg shadow-xl border border-gray-200 z-50 w-48">
+                                <div className="motion-pop absolute right-0 top-full mt-1 bg-white rounded-2xl shadow-2xl shadow-gray-900/10 border border-gray-100 z-50 w-48 ring-1 ring-black/5 overflow-hidden">
                                   <button
+                                    type="button"
                                     onClick={() => {
                                       const emoji = prompt('Enter emoji reaction:');
                                       if (emoji) handleAddReaction(message.id, emoji);
                                     }}
-                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-sky-50 flex items-center gap-2 transition-colors"
                                   >
                                     <span>😀</span>
                                     Add Reaction
                                   </button>
                                   <button
+                                    type="button"
                                     onClick={() => {
                                       setShowForwardDialog(true);
                                       setSelectedMessage(message.id);
                                     }}
-                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-sky-50 flex items-center gap-2 transition-colors"
                                   >
                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
@@ -2402,12 +2535,13 @@ function Inbox() {
                                     Forward
                                   </button>
                                   <button
+                                    type="button"
                                     onClick={() => {
                                       if (window.confirm('Delete this message?')) {
                                         handleDeleteMessage(message.id);
                                       }
                                     }}
-                                    className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                                    className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2 transition-colors"
                                   >
                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -2426,9 +2560,14 @@ function Inbox() {
                 </div>
 
                 {/* In-chat Intervene bar when there is a customer message and not yet intervened */}
-                {selectedContact?.phone && !intervenedPhones[selectedContact.phone] && messages.some((m) => m.type === 'incoming') && (
-                  <div className="bg-amber-50 border-t border-amber-200 px-6 py-3 flex items-center justify-center gap-3 flex-wrap">
-                    <span className="text-sm text-amber-800">New customer message — take over the conversation</span>
+                {selectedContact?.phone &&
+                  !(
+                    intervenedPhones[selectedContact.phone] ||
+                    String(selectedContact?.chatStatus || '').toLowerCase() === 'intervened'
+                  ) &&
+                  messages.some((m) => m.type === 'incoming') && (
+                  <div className="bg-gradient-to-r from-amber-50/95 via-amber-50/80 to-orange-50/60 border-t border-amber-200/80 px-6 py-3 flex items-center justify-center gap-3 flex-wrap shadow-inner motion-enter">
+                    <span className="text-sm text-amber-900/90 font-medium">New customer message — take over the conversation</span>
                     <button
                       type="button"
                       onClick={async () => {
@@ -2446,7 +2585,7 @@ function Inbox() {
                           alert(e?.message || 'Failed to intervene');
                         }
                       }}
-                      className="px-4 py-2 rounded-lg bg-teal-600 text-white font-medium text-sm hover:bg-teal-700"
+                      className="px-4 py-2 rounded-xl bg-sky-600 text-white font-semibold text-sm hover:bg-sky-700 shadow-md shadow-sky-600/25 hover:shadow-lg transition-all duration-200 active:scale-[0.98]"
                     >
                       Intervene
                     </button>
@@ -2454,17 +2593,18 @@ function Inbox() {
                 )}
 
                 {/* Message Input: when intervened show Send; otherwise Intervene (admin) when chat has customer message or is selected */}
-                <div className="bg-white border-t border-gray-200 px-6 py-4 flex justify-center items-center flex-wrap gap-2">
+                <div className="bg-white/95 backdrop-blur-md border-t border-gray-200/80 px-6 py-4 flex justify-center items-center flex-wrap gap-2 shadow-[0_-4px_24px_-8px_rgba(14,165,233,0.12)]">
                   {selectedContact?.phone && (
-                    intervenedPhones[selectedContact.phone] ? (
-                      <form onSubmit={handleSendMessage} className="flex flex-col gap-2 flex-1 min-w-[200px] max-w-xl">
+                    (intervenedPhones[selectedContact.phone] ||
+                      String(selectedContact?.chatStatus || '').toLowerCase() === 'intervened') ? (
+                      <form onSubmit={handleSendMessage} className="flex flex-col gap-2 flex-1 min-w-[220px] max-w-2xl">
                         <div className="relative w-full">
-                          <div className="flex items-center justify-end mb-1">
+                          <div className="flex items-center justify-end mb-2">
                             <button
                               type="button"
                               onClick={() => setInterveneQuickPickerOpen((v) => !v)}
                               disabled={loadingInterveneOptions || sending}
-                              className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs font-semibold text-gray-800 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                              className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border-2 border-gray-200/90 rounded-xl text-xs font-semibold text-gray-800 hover:bg-sky-50/80 hover:border-sky-200/70 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm"
                               title="Insert canned message or approved template"
                             >
                               <span className="text-base leading-none">📋</span>
@@ -2475,51 +2615,54 @@ function Inbox() {
                           {interveneQuickPickerOpen && (
                             <div
                               ref={interveneQuickPickerRef}
-                              className="absolute right-0 top-full mt-2 w-[360px] max-w-[90vw] bg-white rounded-xl border border-gray-200 shadow-xl z-50 overflow-hidden"
+                              className="motion-pop absolute right-0 bottom-full mb-2 w-[420px] max-w-[92vw] bg-white rounded-2xl border border-sky-100/90 shadow-2xl shadow-sky-900/15 z-50 overflow-hidden ring-1 ring-black/5"
                             >
-                              <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between gap-2">
-                                <div className="text-sm font-semibold text-gray-900">Quick Insert</div>
+                              <div className="px-4 py-3 bg-gradient-to-r from-slate-50 to-sky-50/40 border-b border-gray-100 flex items-center justify-between gap-2">
+                                <div className="text-sm font-bold text-gray-900 tracking-tight">Quick Insert</div>
                                 <button
                                   type="button"
                                   onClick={() => setInterveneQuickPickerOpen(false)}
-                                  className="p-1 rounded hover:bg-gray-200 text-gray-600"
+                                  className="w-8 h-8 rounded-xl hover:bg-white text-gray-500 hover:text-gray-900 transition border border-transparent hover:border-gray-200"
                                   aria-label="Close"
                                 >
                                   ×
                                 </button>
                               </div>
 
-                              <div className="max-h-[360px] overflow-y-auto">
+                              <div className="max-h-[380px] overflow-y-auto">
                                 {loadingInterveneOptions ? (
-                                  <div className="px-3 py-4 text-sm text-gray-500">Loading options...</div>
+                                  <div className="px-4 py-6 flex items-center gap-2 text-sm text-gray-500">
+                                    <div className="h-5 w-5 rounded-full border-2 border-sky-200 border-t-sky-600 animate-spin" />
+                                    Loading options...
+                                  </div>
                                 ) : (
                                   <>
                                     {interveneOptionsError && (
-                                      <div className="px-3 py-2 text-xs text-red-600 border-b border-gray-100">
+                                      <div className="px-4 py-2 text-xs text-red-600 border-b border-red-100 bg-red-50/50">
                                         {interveneOptionsError}
                                       </div>
                                     )}
 
-                                    <div className="px-3 py-2">
-                                      <div className="text-xs font-semibold text-gray-500 mb-2">Canned Messages</div>
+                                    <div className="px-4 py-3">
+                                      <div className="text-xs font-bold text-sky-700 uppercase tracking-wide mb-2">Canned Messages</div>
                                       {interveneCannedOptions.length === 0 ? (
-                                        <div className="text-xs text-gray-500 py-2">No canned messages.</div>
+                                        <div className="text-xs text-gray-500">No canned messages.</div>
                                       ) : (
-                                        <div className="space-y-1">
+                                        <div className="space-y-1.5">
                                           {interveneCannedOptions.map((opt) => {
                                             const preview = String(opt.insertValue || "").trim();
                                             const previewText =
-                                              preview.length > 42 ? `${preview.slice(0, 42)}...` : preview;
+                                              preview.length > 48 ? `${preview.slice(0, 48)}...` : preview;
                                             return (
                                               <button
                                                 key={opt.id}
                                                 type="button"
                                                 onClick={() => sendInterveneQuickItem(opt.insertValue)}
                                                 disabled={sending}
-                                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 transition border border-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-sky-50/80 border-2 border-gray-100 hover:border-sky-200/80 disabled:opacity-50 disabled:cursor-not-allowed transition"
                                               >
                                                 <div className="text-sm font-semibold text-gray-900 truncate">{opt.label}</div>
-                                                <div className="text-xs text-gray-500 truncate mt-0.5">{previewText}</div>
+                                                <div className="text-xs text-gray-500 truncate mt-0.5">{previewText || "—"}</div>
                                               </button>
                                             );
                                           })}
@@ -2529,26 +2672,26 @@ function Inbox() {
 
                                     <div className="border-t border-gray-100" />
 
-                                    <div className="px-3 py-2">
-                                      <div className="text-xs font-semibold text-gray-500 mb-2">Approved Templates</div>
+                                    <div className="px-4 py-3">
+                                      <div className="text-xs font-bold text-sky-700 uppercase tracking-wide mb-2">Approved Templates</div>
                                       {interveneTemplateOptions.length === 0 ? (
-                                        <div className="text-xs text-gray-500 py-2">No approved templates.</div>
+                                        <div className="text-xs text-gray-500">No approved templates.</div>
                                       ) : (
-                                        <div className="space-y-1">
+                                        <div className="space-y-1.5">
                                           {interveneTemplateOptions.map((opt) => {
                                             const preview = String(opt.insertValue || "").trim();
                                             const previewText =
-                                              preview.length > 42 ? `${preview.slice(0, 42)}...` : preview;
+                                              preview.length > 48 ? `${preview.slice(0, 48)}...` : preview;
                                             return (
                                               <button
                                                 key={opt.id}
                                                 type="button"
                                                 onClick={() => sendInterveneQuickItem(opt.insertValue)}
                                                 disabled={sending}
-                                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 transition border border-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-sky-50/80 border-2 border-gray-100 hover:border-sky-200/80 disabled:opacity-50 disabled:cursor-not-allowed transition"
                                               >
                                                 <div className="text-sm font-semibold text-gray-900 truncate">{opt.label}</div>
-                                                <div className="text-xs text-gray-500 truncate mt-0.5">{previewText}</div>
+                                                <div className="text-xs text-gray-500 truncate mt-0.5">{previewText || "—"}</div>
                                               </button>
                                             );
                                           })}
@@ -2568,13 +2711,13 @@ function Inbox() {
                             value={messageText}
                             onChange={(e) => setMessageText(e.target.value)}
                             placeholder="Type a message..."
-                            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                            className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none bg-gray-50/80 hover:bg-white transition-all text-sm"
                             disabled={sending}
                           />
                           <button
                             type="submit"
                             disabled={!messageText.trim() || sending}
-                            className="px-5 py-2 rounded-lg bg-blue-600 text-white font-medium text-sm hover:bg-blue-700 disabled:opacity-50"
+                            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-sky-700 text-white font-semibold text-sm hover:from-sky-700 hover:to-sky-800 shadow-md shadow-sky-600/25 disabled:opacity-50 transition-all duration-200 active:scale-[0.98]"
                           >
                             {sending ? 'Sending...' : 'Send'}
                           </button>
@@ -2598,7 +2741,7 @@ function Inbox() {
                             alert(e?.message || 'Failed to intervene');
                           }
                         }}
-                        className="px-5 py-2 rounded-lg bg-teal-600 text-white font-medium text-sm hover:bg-teal-700"
+                        className="px-5 py-2.5 rounded-xl bg-sky-600 text-white font-semibold text-sm hover:bg-sky-700 shadow-md shadow-sky-600/25 transition-all duration-200 active:scale-[0.98]"
                       >
                         Intervene
                       </button>
@@ -2607,13 +2750,13 @@ function Inbox() {
                 </div>
               </>
             ) : (
-              <div className="flex-1 flex items-center justify-center bg-gray-50">
-                <div className="text-center">
-                  <svg className="w-24 h-24 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="flex-1 flex items-center justify-center bg-gradient-to-b from-sky-50/40 via-transparent to-sky-100/20">
+                <div className="text-center motion-enter px-6">
+                  <svg className="w-24 h-24 text-sky-200 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
                   </svg>
-                  <p className="text-xl font-semibold text-gray-600 mb-2">Select a conversation</p>
-                  <p className="text-sm text-gray-500">Choose a contact from the list to start chatting</p>
+                  <p className="text-xl font-bold text-gray-800 mb-2 tracking-tight">Select a conversation</p>
+                  <p className="text-sm text-gray-600">Choose a contact from the list to start chatting</p>
                 </div>
               </div>
             )}
@@ -2623,72 +2766,77 @@ function Inbox() {
 
       {/* Contact Edit Dialog */}
       {showContactEditDialog && editingContact && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold mb-4">Edit Contact</h3>
-            <form onSubmit={(e) => {
-              e.preventDefault();
-              const formData = new FormData(e.target);
-              handleUpdateContact({
-                name: formData.get('name'),
-                email: formData.get('email'),
-                notes: formData.get('notes'),
-                tags: formData.get('tags')?.split(',').map(t => t.trim()).filter(t => t) || []
-              });
-            }}>
-              <div className="space-y-4">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="motion-pop bg-white rounded-2xl shadow-2xl shadow-gray-900/15 border border-gray-100/90 w-full max-w-md overflow-hidden ring-1 ring-black/5">
+            <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-slate-50 via-sky-50/50 to-sky-50/30">
+              <h3 className="text-lg font-bold text-gray-900 tracking-tight">Edit Contact</h3>
+            </div>
+            <form
+              className="p-5 md:p-6 bg-gradient-to-b from-white to-sky-50/20"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                handleUpdateContact({
+                  name: formData.get('name'),
+                  email: formData.get('email'),
+                  notes: formData.get('notes'),
+                  tags: formData.get('tags')?.split(',').map(t => t.trim()).filter(t => t) || []
+                });
+              }}
+            >
+              <div className="space-y-4 rounded-2xl border border-gray-100/90 bg-white p-4 shadow-sm ring-1 ring-gray-100/70">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                  <label className="block text-sm font-semibold text-gray-800 mb-2">Name</label>
                   <input
                     type="text"
                     name="name"
                     defaultValue={editingContact.name}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none bg-gray-50/80 hover:bg-white transition-all text-sm"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <label className="block text-sm font-semibold text-gray-800 mb-2">Email</label>
                   <input
                     type="email"
                     name="email"
                     defaultValue={editingContact.email || ''}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none bg-gray-50/80 hover:bg-white transition-all text-sm"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                  <label className="block text-sm font-semibold text-gray-800 mb-2">Notes</label>
                   <textarea
                     name="notes"
                     defaultValue={editingContact.notes || ''}
                     rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none bg-gray-50/80 hover:bg-white transition-all text-sm resize-y min-h-[5rem]"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Tags (comma-separated)</label>
+                  <label className="block text-sm font-semibold text-gray-800 mb-2">Tags (comma-separated)</label>
                   <input
                     type="text"
                     name="tags"
                     defaultValue={Array.isArray(editingContact.tags) ? editingContact.tags.join(', ') : ''}
                     placeholder="tag1, tag2, tag3"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none bg-gray-50/80 hover:bg-white transition-all text-sm"
                   />
                 </div>
               </div>
-              <div className="flex gap-3 mt-6">
+              <div className="flex gap-3 mt-6 pt-4 border-t border-gray-100">
                 <button
                   type="button"
                   onClick={() => {
                     setShowContactEditDialog(false);
                     setEditingContact(null);
                   }}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition"
+                  className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition-all duration-200 active:scale-[0.98]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                  className="flex-1 px-4 py-2.5 bg-sky-600 text-white rounded-xl font-semibold hover:bg-sky-700 shadow-md shadow-sky-600/25 transition-all duration-200 active:scale-[0.98]"
                 >
                   Save
                 </button>
@@ -2700,55 +2848,61 @@ function Inbox() {
 
       {/* Forward Message Dialog */}
       {showForwardDialog && selectedMessage && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold mb-4">Forward Message</h3>
-            <div className="max-h-64 overflow-y-auto mb-4">
-              {inboxList.filter(c => c.id !== selectedContact?.id).map(contact => (
-                <label key={contact.id} className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded cursor-pointer">
-                  <input
-                    type="checkbox"
-                    value={contact.id}
-                    className="rounded"
-                  />
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
-                      <span className="text-white text-xs font-semibold">
-                        {contact.name?.charAt(0).toUpperCase() || contact.phone.charAt(0)}
-                      </span>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium">{contact.name || contact.phone}</p>
-                      <p className="text-xs text-gray-500">{contact.phone}</p>
-                    </div>
-                  </div>
-                </label>
-              ))}
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="motion-pop bg-white rounded-2xl shadow-2xl shadow-gray-900/15 border border-gray-100/90 w-full max-w-md overflow-hidden ring-1 ring-black/5">
+            <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-slate-50 via-sky-50/40 to-sky-50/25">
+              <h3 className="text-lg font-bold text-gray-900 tracking-tight">Forward Message</h3>
             </div>
-            <div className="flex gap-3">
-              <button
-                onClick={() => {
-                  setShowForwardDialog(false);
-                  setSelectedMessage(null);
-                }}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  const checkboxes = document.querySelectorAll('input[type="checkbox"]:checked');
-                  const contactIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
-                  if (contactIds.length > 0) {
-                    await handleForwardMessage(selectedMessage);
-                  } else {
-                    alert('Please select at least one contact');
-                  }
-                }}
-                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-              >
-                Forward
-              </button>
+            <div className="p-5 md:p-6 bg-gradient-to-b from-white to-sky-50/15">
+              <div className="max-h-64 overflow-y-auto mb-4 rounded-xl border border-gray-100/90 bg-gray-50/40 divide-y divide-gray-100/80">
+                {inboxList.filter(c => c.id !== selectedContact?.id).map(contact => (
+                  <label key={contact.id} className="flex items-center gap-3 p-3 hover:bg-sky-50/50 rounded-xl cursor-pointer transition-colors">
+                    <input
+                      type="checkbox"
+                      value={contact.id}
+                      className="rounded border-gray-300 text-sky-600 focus:ring-sky-400"
+                    />
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 flex items-center justify-center shrink-0 shadow-sm shadow-sky-500/20">
+                        <span className="text-white text-xs font-semibold">
+                          {contact.name?.charAt(0).toUpperCase() || contact.phone.charAt(0)}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-gray-900 truncate">{contact.name || contact.phone}</p>
+                        <p className="text-xs text-gray-500 truncate">{contact.phone}</p>
+                      </div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-3 pt-2 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowForwardDialog(false);
+                    setSelectedMessage(null);
+                  }}
+                  className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition-all duration-200 active:scale-[0.98]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const checkboxes = document.querySelectorAll('input[type="checkbox"]:checked');
+                    const contactIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
+                    if (contactIds.length > 0) {
+                      await handleForwardMessage(selectedMessage);
+                    } else {
+                      alert('Please select at least one contact');
+                    }
+                  }}
+                  className="flex-1 px-4 py-2.5 bg-sky-600 text-white rounded-xl font-semibold hover:bg-sky-700 shadow-md shadow-sky-600/25 transition-all duration-200 active:scale-[0.98]"
+                >
+                  Forward
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2756,14 +2910,16 @@ function Inbox() {
 
       {/* Template Selection Modal */}
       {showTemplateModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="motion-pop bg-white rounded-2xl shadow-2xl shadow-gray-900/15 border border-gray-100/90 w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden ring-1 ring-black/5">
             {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-gray-900">Select Template</h2>
+            <div className="px-5 md:px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-slate-50 via-sky-50/50 to-sky-50/30 shrink-0">
+              <h2 className="text-xl font-bold text-gray-900 tracking-tight">Select Template</h2>
               <button
+                type="button"
                 onClick={() => setShowTemplateModal(false)}
-                className="text-gray-400 hover:text-gray-600 transition"
+                className="text-gray-400 hover:text-gray-700 rounded-xl p-2 transition-all duration-200 hover:bg-white/90 active:scale-95 ring-1 ring-transparent hover:ring-gray-200/80"
+                aria-label="Close"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -2772,27 +2928,28 @@ function Inbox() {
             </div>
 
             {/* Modal Body */}
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-5 md:p-6 bg-gradient-to-b from-white to-sky-50/20 min-h-0">
               {loadingTemplates ? (
-                <div className="flex items-center justify-center py-12">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                <div className="flex items-center justify-center py-12 motion-enter">
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-sky-200 border-t-sky-600" />
                   <p className="ml-3 text-gray-600">Loading templates...</p>
                 </div>
               ) : templates.length === 0 ? (
-                <div className="text-center py-12">
-                  <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="text-center py-12 motion-enter">
+                  <svg className="w-16 h-16 text-sky-200 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
-                  <p className="text-gray-600 font-medium">No approved templates found</p>
+                  <p className="text-gray-700 font-semibold">No approved templates found</p>
                   <p className="text-sm text-gray-500 mt-2">Please create and approve templates first</p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-4">
+                <div className="grid grid-cols-1 gap-4 motion-stagger-children">
                   {templates.map((template) => (
                     <button
                       key={template.id}
+                      type="button"
                       onClick={() => handleTemplateSelect(template)}
-                      className="text-left p-4 border border-gray-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-all duration-200"
+                      className="text-left p-4 border-2 border-gray-100 rounded-2xl hover:border-sky-300 hover:bg-sky-50/50 transition-all duration-200 shadow-sm hover:shadow-md motion-hover-lift bg-white/90"
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex-1">
@@ -2822,10 +2979,11 @@ function Inbox() {
             </div>
 
             {/* Modal Footer */}
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end">
+            <div className="px-5 md:px-6 py-4 border-t border-gray-100 flex justify-end bg-white/95 backdrop-blur-sm shrink-0">
               <button
+                type="button"
                 onClick={() => setShowTemplateModal(false)}
-                className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition"
+                className="px-5 py-2.5 text-gray-700 font-medium border-2 border-gray-200 rounded-xl hover:bg-gray-50 transition-all duration-200 active:scale-[0.98]"
               >
                 Cancel
               </button>

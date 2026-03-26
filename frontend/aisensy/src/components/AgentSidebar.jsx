@@ -31,10 +31,10 @@ const navItems = [
   { to: "/agent-dashboard", label: "Dashboard", icon: icons.dashboard },
   { to: "/live-chat", label: "Live Chat", icon: icons.liveChat },
   { to: "/campaign-reports", label: "History", icon: icons.history },
-  { to: "/manage", label: "Manage", icon: icons.manage },
+  { to: "/agent-manage", label: "Manage", icon: icons.manage },
 ];
 
-function AgentSidebar() {
+function AgentSidebar({ open = true }) {
   const location = useLocation();
   const selectedProject = useMemo(() => {
     const fromState = location?.state?.project;
@@ -48,8 +48,14 @@ function AgentSidebar() {
   }, [location?.state?.project]);
 
   return (
-    <div className="w-20 bg-teal-900 text-white min-h-screen flex flex-col items-center py-6">
-      <div className="text-xl font-bold mb-10">A</div>
+    <aside
+      className={`bg-sky-950 text-white border-r border-sky-900 h-full shrink-0 flex flex-col items-center py-6 transition-all duration-300 overflow-hidden ${
+        open ? "w-20" : "w-0 md:w-20"
+      }`}
+    >
+      <div className="w-10 h-10 mb-10 flex items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-900 shadow-lg shadow-sky-900/40 ring-2 ring-sky-400/30">
+        <span className="text-white font-bold text-lg">A</span>
+      </div>
 
       <nav className="flex flex-col items-center gap-1 w-full px-2">
         {navItems.map((item) => {
@@ -59,8 +65,10 @@ function AgentSidebar() {
               key={item.to}
               to={item.to}
               state={selectedProject ? { project: selectedProject } : undefined}
-              className={`w-full flex flex-col items-center justify-center gap-1 py-3 px-2 rounded-lg transition-colors ${
-                isActive ? "bg-teal-700 text-white" : "text-teal-100 hover:bg-teal-800 hover:text-white"
+              className={`w-full flex flex-col items-center justify-center gap-1 py-3 px-2 rounded-xl transition-all duration-200 ${
+                isActive
+                  ? "bg-sky-600 text-white shadow-lg shadow-sky-900/50 ring-1 ring-sky-400/40"
+                  : "text-sky-100/90 hover:bg-sky-800/90 hover:text-white hover:scale-[1.02]"
               }`}
               title={item.label}
             >
@@ -70,7 +78,7 @@ function AgentSidebar() {
           );
         })}
       </nav>
-    </div>
+    </aside>
   );
 }
 

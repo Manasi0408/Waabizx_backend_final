@@ -254,7 +254,12 @@ exports.sendMessage = async ({ phone, text, type, template, campaignName, mediaU
   } catch (error) {
     // Log detailed error for debugging
     const errorData = error.response?.data || {};
-    const errorMsg = errorData.message || errorData.error || error.message || 'Unknown error';
+    const errorMsg =
+      errorData.errorMessage ||
+      errorData.message ||
+      errorData.error ||
+      error.message ||
+      'Unknown error';
     
     console.error('AiSensy API Error Details:', {
       status: error.response?.status,

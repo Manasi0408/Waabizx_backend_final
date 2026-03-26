@@ -2,6 +2,14 @@ const db = require("../config/db");
 const { Contact, Message, InboxMessage, User } = require("../models");
 const socketService = require("../services/socketService");
 const { sendText, sendTemplate } = require("../services/whatsappService");
+const { upsertConversationWithQuota } = require('../services/conversationBillingService');
+const { recordOutboundInboxMessage } = require('../services/outboundInboxService');
+
+// Defaults shown in the Opt-in Management UI
+const OPT_IN_MESSAGE =
+  'Thanks! You have been opted in for future marketing messages. You will now receive updates and notifications related to this project.';
+const OPT_OUT_MESSAGE =
+  'You have been opted out of your future marketing messages. If you would like to receive messages again, reply APPLY above US/APPLY.';
 
 // Shared list shape for Live Chat: id, phone, customer_name, last_message, last_message_time, unread_count, status
 const conversationListFields = `
@@ -49,7 +57,18 @@ exports.receiveMessage = async (req, res) => {
     try {
       const normalizedPhone = (phone || "").toString().trim();
       if (normalizedPhone) {
+        const normalizedText = (message || "").toString().trim().toUpperCase();
+        const optOutKeywords = ['STOP', 'UNSUBSCRIBE', 'CANCEL'];
+        const isOptOut =
+          optOutKeywords.includes(normalizedText) ||
+          optOutKeywords.some((k) => normalizedText.includes(k));
+        const isOptInKeyword = normalizedText === 'START' || normalizedText === 'YES' || normalizedText === 'HI';
+
         let contact = await Contact.findOne({ where: { phone: normalizedPhone } });
+        const wasNewContact = !contact;
+        const oldOptedOut = contact
+          ? contact.status === "unsubscribed" || !contact.whatsappOptInAt
+          : false;
         if (!contact) {
           const firstUser = await User.findOne({
             where: { status: "active" },
@@ -61,10 +80,35 @@ exports.receiveMessage = async (req, res) => {
               userId: firstUser.id,
               phone: normalizedPhone,
               name: normalizedPhone,
-              status: "active",
+              status: isOptOut ? "unsubscribed" : "active",
+              whatsappOptInAt: isOptOut ? null : new Date(),
             });
           }
         }
+
+        // Update consent state for existing contacts
+        if (contact) {
+          if (isOptOut) {
+            await contact.update({ status: "unsubscribed", whatsappOptInAt: null });
+          } else if (isOptInKeyword && !contact.whatsappOptInAt) {
+            await contact.update({ status: "active", whatsappOptInAt: new Date() });
+          } else if (wasNewContact && contact.status !== "unsubscribed" && !contact.whatsappOptInAt) {
+            // Safety net: new contact should be opted in on first non-STOP message
+            await contact.update({ status: "active", whatsappOptInAt: new Date() });
+          }
+
+          // Auto-reply on first consent change
+          try {
+            if (!isOptOut && normalizedText === "HI") {
+              await sendText(normalizedPhone, OPT_IN_MESSAGE);
+            } else if (isOptOut && !oldOptedOut) {
+              await sendText(normalizedPhone, OPT_OUT_MESSAGE);
+            }
+          } catch (e) {
+            console.error("Auto reply sendText failed (chat webhook):", e?.message || e);
+          }
+        }
+
         if (contact) {
           await Message.create({
             contactId: contact.id,
@@ -495,7 +539,30 @@ exports.sendMessage = async (req, res) => {
     // If WhatsApp sending fails, we still store the message in DB.
     try {
       if (phone && message) {
-        await sendText(phone, message);
+        const contact = await Contact.findOne({ where: { phone } });
+        const isOptedIn = !!(
+          contact &&
+          contact.status !== 'unsubscribed' &&
+          contact.whatsappOptInAt
+        );
+        const billingAccountId =
+          contact && contact.userId != null ? contact.userId : userId;
+
+        let billingAllowed = true;
+        try {
+          const billing = await upsertConversationWithQuota(billingAccountId, phone);
+          billingAllowed = !!billing.allowed;
+        } catch (billingErr) {
+          console.error('Conversation billing check failed (chatController.sendMessage):', billingErr?.message || billingErr);
+        }
+
+        if (isOptedIn && billingAllowed) {
+          await sendText(phone, message);
+        } else if (!isOptedIn) {
+          console.log('❌ Blocked chat sendText (opt-out / not opted-in):', phone);
+        } else {
+          console.log('❌ Blocked chat sendText (conversation limit reached):', phone);
+        }
       }
     } catch (waErr) {
       console.error("WhatsApp sendText failed (chatController.sendMessage):", waErr?.message || waErr);
@@ -509,6 +576,8 @@ exports.sendMessage = async (req, res) => {
       "UPDATE conversations SET last_message = ? WHERE id = ?",
       [message, conversation_id]
     );
+
+    await recordOutboundInboxMessage(phone, message, { status: 'sent' });
 
     const [messageRows] = await db.query(
       "SELECT id, conversation_id, sender, message, created_at FROM message WHERE conversation_id = ? ORDER BY created_at ASC",
@@ -586,8 +655,31 @@ exports.sendTemplateMessage = async (req, res) => {
     // Send approved template via WhatsApp template API
     try {
       if (phone) {
-        // whatsappService.sendTemplate signature: (to, templateName, languageCode, parameters)
-        await sendTemplate(phone, templateName, templateLanguage, templateParams);
+        const contact = await Contact.findOne({ where: { phone } });
+        const isOptedIn = !!(
+          contact &&
+          contact.status !== 'unsubscribed' &&
+          contact.whatsappOptInAt
+        );
+        const billingAccountId =
+          contact && contact.userId != null ? contact.userId : userId;
+
+        let billingAllowed = true;
+        try {
+          const billing = await upsertConversationWithQuota(billingAccountId, phone);
+          billingAllowed = !!billing.allowed;
+        } catch (billingErr) {
+          console.error('Conversation billing check failed (chatController.sendTemplateMessage):', billingErr?.message || billingErr);
+        }
+
+        if (isOptedIn && billingAllowed) {
+          // whatsappService.sendTemplate signature: (to, templateName, languageCode, parameters)
+          await sendTemplate(phone, templateName, templateLanguage, templateParams);
+        } else if (!isOptedIn) {
+          console.log('❌ Blocked chat sendTemplate (opt-out / not opted-in):', phone);
+        } else {
+          console.log('❌ Blocked chat sendTemplate (conversation limit reached):', phone);
+        }
       }
     } catch (waErr) {
       console.error("WhatsApp sendTemplate failed (chatController.sendTemplateMessage):", waErr?.message || waErr);
@@ -598,6 +690,8 @@ exports.sendTemplateMessage = async (req, res) => {
       [conversation_id, textToStore]
     );
     await db.query("UPDATE conversations SET last_message = ? WHERE id = ?", [textToStore, conversation_id]);
+
+    await recordOutboundInboxMessage(phone, textToStore, { status: 'sent' });
 
     const [messageRows] = await db.query(
       "SELECT id, conversation_id, sender, message, created_at FROM message WHERE conversation_id = ? ORDER BY created_at ASC",

@@ -32,6 +32,9 @@ const managerAgentRoutes = require('./routes/managerAgentRoutes');
 const adminAgentMessagesRoutes = require('./routes/adminAgentMessagesRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const cannedMessageRoutes = require('./routes/cannedMessageRoutes');
+const superAdminRoutes = require('./routes/superAdminRoutes');
+const agentCannedMessageRoutes = require('./routes/agentCannedMessageRoutes');
+const flowRoutes = require('./routes/flowRoutes');
 
 // Initialize Express app
 const app = express();
@@ -111,6 +114,7 @@ app.use('/meta', metaRoutes);
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api', adminAgentMessagesRoutes);
+app.use('/api', superAdminRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/broadcast', broadcastRoutes);
 app.use('/api/contacts', contactRoutes);
@@ -118,6 +122,8 @@ app.use('/api/contact-management', contactManagementRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/canned-messages', cannedMessageRoutes);
+app.use('/api/agent/canned-messages', agentCannedMessageRoutes);
+app.use('/api', flowRoutes);
 app.use("/api/settings", settingRoutes);
 // Webhook endpoint - single clean route
 app.use('/webhook', metaWebhookRoutes);

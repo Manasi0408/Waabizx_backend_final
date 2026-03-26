@@ -1,4 +1,5 @@
 const aisensyService = require('../services/aisensyService');
+const { recordOutboundInboxMessage } = require('../services/outboundInboxService');
 const { MetaMessage, Message, Contact, User } = require('../models');
 const { Op } = require('sequelize');
 
@@ -75,7 +76,25 @@ exports.sendMessage = async (req, res) => {
     // Send message with all data (try to send to WhatsApp)
     let result = null;
     let sendStatus = 'sent';
-    try {
+
+    // Enforce opt-in/out before sending
+    const requestingUserId = req.user?.id;
+    const normalizedPhone = phone.toString().trim().replace(/^\+/, '');
+    const contactWhere = requestingUserId
+      ? { phone: normalizedPhone, userId: requestingUserId }
+      : { phone: normalizedPhone };
+    const contact = await Contact.findOne({ where: contactWhere });
+    const isOptedIn = !!(
+      contact &&
+      contact.status !== 'unsubscribed' &&
+      contact.whatsappOptInAt
+    );
+
+    if (!isOptedIn) {
+      console.log('❌ Blocked outbound message (opt-out / not opted-in):', normalizedPhone);
+      sendStatus = 'failed';
+    } else {
+      try {
       // Determine actual message type
       const actualType = type || (mediaUrl ? 'media' : 'text');
       
@@ -88,10 +107,11 @@ exports.sendMessage = async (req, res) => {
         mediaType: mediaType || 'image'
       });
       console.log('✅ AiSensy API call successful:', result);
-    } catch (sendError) {
+      } catch (sendError) {
       console.error('❌ Error sending message via AiSensy:', sendError.message || sendError);
       sendStatus = 'failed';
       // Continue to save message even if WhatsApp send fails
+      }
     }
 
     // Save to MetaMessage table (always save, even if WhatsApp send failed)
@@ -146,6 +166,10 @@ exports.sendMessage = async (req, res) => {
       await contact.update({
         lastContacted: new Date()
       });
+
+      await recordOutboundInboxMessage(contact.phone, messageText || '', {
+        status: sendStatus === 'failed' ? 'failed' : 'sent',
+      });
     } else {
       // Fallback: If no authenticated user, try to find first active user (for backward compatibility)
       const firstUser = await User.findOne({
@@ -190,6 +214,10 @@ exports.sendMessage = async (req, res) => {
         // Update contact's lastContacted
         await contact.update({
           lastContacted: new Date()
+        });
+
+        await recordOutboundInboxMessage(contact.phone, messageText || '', {
+          status: sendStatus === 'failed' ? 'failed' : 'sent',
         });
       }
     }

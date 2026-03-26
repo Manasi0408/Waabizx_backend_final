@@ -1,5 +1,14 @@
 const db = require("../config/db");
 const socketService = require("../services/socketService");
+const { Contact, User } = require("../models");
+const { sendText } = require("../services/whatsappService");
+const { upsertConversationWithQuota } = require('../services/conversationBillingService');
+
+// Defaults shown in the Opt-in Management UI
+const OPT_IN_MESSAGE =
+  'Thanks! You have been opted in for future marketing messages. You will now receive updates and notifications related to this project.';
+const OPT_OUT_MESSAGE =
+  'You have been opted out of your future marketing messages. If you would like to receive messages again, reply APPLY above US/APPLY.';
 
 // AiSensy-style: use conversations + message table.
 // New customer message → REQUESTING; existing → keep current status (requesting/active/intervened).
@@ -13,6 +22,81 @@ exports.receiveMessage = async (req, res) => {
 
     const phone = message.from;
     const text = message.text?.body || "";
+
+    // Consent handling for the Contacts table:
+    // - First message for a new contact => opt-in (unless STOP/UNSUBSCRIBE/CANCEL)
+    // - STOP/UNSUBSCRIBE/CANCEL => opt-out
+    const normalizedText = (text || "").toString().trim().toUpperCase();
+    const optOutKeywords = ["STOP", "UNSUBSCRIBE", "CANCEL"];
+    const isOptOut =
+      optOutKeywords.includes(normalizedText) ||
+      optOutKeywords.some((k) => normalizedText.includes(k));
+    const isOptInKeyword =
+      normalizedText === "START" || normalizedText === "YES" || normalizedText === "HI";
+
+    // Update/ensure consent state in DB so admins see it in Contacts table
+    try {
+      let contact = await Contact.findOne({ where: { phone } });
+      const wasNewContact = !contact;
+      const oldOptedOut = contact
+        ? contact.status === 'unsubscribed' || !contact.whatsappOptInAt
+        : false;
+
+      if (!contact) {
+        const firstUser = await User.findOne({
+          where: { status: "active" },
+          order: [["id", "ASC"]],
+        });
+
+        if (firstUser) {
+          contact = await Contact.create({
+            userId: firstUser.id,
+            phone,
+            name: phone,
+            status: isOptOut ? "unsubscribed" : "active",
+            whatsappOptInAt: isOptOut ? null : new Date(),
+          });
+        }
+      } else {
+        if (isOptOut) {
+          await contact.update({ status: "unsubscribed", whatsappOptInAt: null });
+        } else if (isOptInKeyword && !contact.whatsappOptInAt) {
+          await contact.update({ status: "active", whatsappOptInAt: new Date() });
+        } else if (wasNewContact && contact.status !== "unsubscribed" && !contact.whatsappOptInAt) {
+          // Safety net (shouldn't happen often because create sets the timestamp)
+          await contact.update({ status: "active", whatsappOptInAt: new Date() });
+        }
+      }
+
+      if (contact) {
+        await contact.update({ lastContacted: new Date() });
+      }
+
+      // Auto-reply on first consent change
+      let billingAllowed = true;
+      try {
+        if (contact) {
+          const billing = await upsertConversationWithQuota(contact.userId, phone);
+          billingAllowed = !!billing.allowed;
+        }
+      } catch (billingErr) {
+        console.error('Conversation billing check failed (whatsappWebhook):', billingErr?.message || billingErr);
+      }
+
+      try {
+        if (billingAllowed) {
+          if (!isOptOut && normalizedText === "HI") {
+            await sendText(phone, OPT_IN_MESSAGE);
+          } else if (isOptOut && !oldOptedOut) {
+            await sendText(phone, OPT_OUT_MESSAGE);
+          }
+        }
+      } catch (e) {
+        console.error('Auto reply sendText failed (agent webhook):', e?.message || e);
+      }
+    } catch (consentErr) {
+      console.error("Consent sync to Contacts table failed:", consentErr);
+    }
 
     // 1️⃣ Find or create open conversation for this phone
     const [rows] = await db.query(

@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "react-router-dom";
-import { getActiveChats, getRequestingChats, getManagerRequesting, getAgentRequesting, getIntervenedChats, getMessages, acceptChat, assignChatToAgent, interveneChat, sendMessage as sendChatMessage } from "../api/chatApi";
+import { getActiveChats, getRequestingChats, getManagerRequesting, getAgentRequesting, getIntervenedChats, getMessages, acceptChat, assignChatToAgent, sendMessage as sendChatMessage } from "../api/chatApi";
 import AgentSidebar from "../components/AgentSidebar";
+import AgentTopbar from "../components/AgentTopbar";
 import { initializeSocket, onSocketEvent, offSocketEvent } from "../services/socketService";
 import axios from "../api/axios";
 
@@ -24,16 +25,6 @@ function getInitial(nameOrPhone) {
 
 function LiveChatPage() {
   const location = useLocation();
-  const selectedProject = useMemo(() => {
-    const fromState = location?.state?.project;
-    if (fromState) return fromState;
-    try {
-      const raw = localStorage.getItem("selectedProject");
-      return raw ? JSON.parse(raw) : null;
-    } catch (e) {
-      return null;
-    }
-  }, [location?.state?.project]);
 
   const [role, setRole] = useState(null);
   const [tab, setTab] = useState("active");
@@ -53,6 +44,7 @@ function LiveChatPage() {
   const [interventionAlert, setInterventionAlert] = useState(null);
   const [messageText, setMessageText] = useState("");
   const [sending, setSending] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const [insertOpen, setInsertOpen] = useState(false);
   const insertPopoverRef = useRef(null);
@@ -61,6 +53,8 @@ function LiveChatPage() {
   const [insertCannedOptions, setInsertCannedOptions] = useState([]);
   const [insertTemplateOptions, setInsertTemplateOptions] = useState([]);
   const insertLoadedRef = useRef(false);
+  const chatScrollRef = useRef(null);
+  const messagesEndRef = useRef(null);
 
   const setSelectedAgent = useCallback((agent) => {
     setSelectedAgentState(agent);
@@ -500,6 +494,9 @@ function LiveChatPage() {
         .map((t) => {
           const body = t?.components?.find((c) => String(c?.type || "").toUpperCase() === "BODY");
           const bodyText = body?.text || t?.name || "";
+          const sampleParams = Array.isArray(body?.example?.body_text)
+            ? (Array.isArray(body.example.body_text[0]) ? body.example.body_text[0] : [])
+            : [];
           return {
             id: `meta_${t.id}`,
             label: String(t?.name || "Meta Template"),
@@ -507,6 +504,7 @@ function LiveChatPage() {
             kind: "template",
             templateName: String(t?.name || ""),
             templateLanguage: String(t?.language?.code || "en_US"),
+            templateParams: sampleParams.map((p) => String(p ?? "")),
           };
         });
 
@@ -519,42 +517,56 @@ function LiveChatPage() {
     }
   };
 
+  // Resolve template placeholders like {{1}}, {{2}} using current chat values.
+  const resolveTemplatePlaceholders = (rawText, chat) => {
+    const text = String(rawText || "");
+    if (!text.includes("{{")) return text;
+
+    const phone = String(chat?.phone || "").trim();
+    const normalizedPhone = phone.replace(/^\+/, "");
+    const customerName = String(chat?.customer_name || chat?.name || "").trim();
+    const email = String(chat?.email || "").trim();
+
+    const defaultName =
+      customerName && customerName !== phone ? customerName : (normalizedPhone || "Customer");
+
+    const valueMap = {
+      1: defaultName,
+      2: normalizedPhone || defaultName,
+      3: email || defaultName,
+      4: normalizedPhone ? normalizedPhone.slice(-4) : defaultName,
+    };
+
+    return text.replace(/\{\{\s*(\d+)\s*\}\}/g, (full, idxRaw) => {
+      const idx = Number(idxRaw);
+      if (!Number.isFinite(idx)) return full;
+      const mapped = valueMap[idx];
+      if (mapped && String(mapped).trim()) return String(mapped);
+      return defaultName;
+    });
+  };
+
   const sendInsertItem = async (opt) => {
     const item = typeof opt === "string" ? { kind: "canned", insertValue: opt } : (opt || {});
-    const text = String(item.insertValue || "").trim();
-    if (!selectedChat?.id || !text || sending) return;
+    const rawText = String(item.insertValue || "").trim();
+    const resolvedText = resolveTemplatePlaceholders(rawText, selectedChat);
+    if (!selectedChat?.id || !resolvedText || sending) return;
 
     setInsertOpen(false);
     setInsertError("");
     setSending(true);
 
     try {
-      // Templates must be sent using Meta-approved template API.
-      if (item.kind === "template") {
-        const payload = {
-          conversation_id: selectedChat.id,
-          templateName: item.templateName,
-          templateLanguage: item.templateLanguage || "en_US",
-          templateParams: [],
-          displayText: text,
-        };
-
-        const res = await axios.post("/chat/send-template", payload);
-        const data = res?.data;
-        const list = Array.isArray(data?.messages) ? data.messages : null;
-        setMessageText("");
-        setMessages(list && list.length > 0 ? list : []);
+      // Match /inbox behavior: Quick Insert (including template bodies) sends as normal text.
+      const data = await sendChatMessage(selectedChat.id, resolvedText);
+      setMessageText("");
+      const list = Array.isArray(data?.messages) ? data.messages : null;
+      if (list && list.length > 0) {
+        setMessages(list);
       } else {
-        const data = await sendChatMessage(selectedChat.id, text);
-        setMessageText("");
-        const list = Array.isArray(data?.messages) ? data.messages : null;
-        if (list && list.length > 0) {
-          setMessages(list);
-        } else {
-          const msgData = await getMessages(selectedChat.id);
-          const fallback = Array.isArray(msgData) ? msgData : (msgData && Array.isArray(msgData.data) ? msgData.data : []);
-          setMessages(fallback);
-        }
+        const msgData = await getMessages(selectedChat.id);
+        const fallback = Array.isArray(msgData) ? msgData : (msgData && Array.isArray(msgData.data) ? msgData.data : []);
+        setMessages(fallback);
       }
     } catch (err) {
       const msg = err?.message || err?.data?.error || "Failed to send message";
@@ -582,16 +594,29 @@ function LiveChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isIntervened]);
 
+  // Keep chat pinned to latest message like /inbox.
+  useEffect(() => {
+    if (!selectedChat) return;
+    const scroller = chatScrollRef.current;
+    if (!scroller) return;
+
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "auto", block: "end" });
+      return;
+    }
+
+    scroller.scrollTop = scroller.scrollHeight;
+  }, [selectedChat, messages, loadingMessages]);
+
   const tabCount = conversations.length;
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      {/* Intervention popup for admin when agent clicks Intervene */}
+    <div className="h-screen flex flex-row bg-gray-50 overflow-hidden">
       {interventionAlert && isManager && (
-        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-[9999] px-6 py-4 bg-teal-700 text-white rounded-lg shadow-lg flex items-center gap-3 min-w-[320px] max-w-md">
-          <span className="font-semibold shrink-0">Intervention</span>
-          <span>
-            <strong>{interventionAlert.agentName}</strong> intervened
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[9999] motion-enter min-w-[280px] max-w-lg rounded-2xl border border-sky-200/80 bg-white/95 backdrop-blur-md px-5 py-4 shadow-2xl shadow-sky-900/15 ring-1 ring-sky-400/25 flex flex-wrap items-center gap-3 text-sm">
+          <span className="font-bold text-sky-700 shrink-0 text-xs uppercase tracking-wider">Intervention</span>
+          <span className="text-gray-700 flex-1 min-w-[200px]">
+            <strong className="text-gray-900">{interventionAlert.agentName}</strong> intervened
             {interventionAlert.dateTime && (
               <> at {new Date(interventionAlert.dateTime).toLocaleString()}</>
             )}
@@ -600,7 +625,7 @@ function LiveChatPage() {
           <button
             type="button"
             onClick={() => setInterventionAlert(null)}
-            className="ml-auto p-1 rounded hover:bg-teal-600"
+            className="shrink-0 w-9 h-9 rounded-xl text-gray-500 hover:bg-gray-100 hover:text-gray-900 transition border border-transparent hover:border-gray-200"
             aria-label="Dismiss"
           >
             ×
@@ -608,111 +633,155 @@ function LiveChatPage() {
         </div>
       )}
 
-      <AgentSidebar />
+      <AgentSidebar open={sidebarOpen} />
 
-      <div className="flex-1 flex flex-col min-w-0">
-        <div className="bg-teal-900 text-white flex items-center gap-4 px-4 py-3 flex-shrink-0">
-          <div className="flex flex-col flex-shrink-0 max-w-[240px] min-w-0">
-            <span className="text-xs font-semibold text-white truncate">
-              {selectedAgent?.name || selectedAgent?.email || currentUserName || currentUserEmail || "—"}
-            </span>
-            <span className="text-xs font-medium text-teal-100/90 truncate">
-              {selectedProject?.project_name ? selectedProject.project_name : "Project: —"}
-            </span>
-          </div>
-          <div className="flex-1 min-w-0 max-w-md mx-auto">
-            <div className="relative w-full">
-              <input
-                type="text"
-                placeholder="Search name or mobile number"
-                className="w-full bg-teal-800 border border-teal-700 rounded-lg pl-10 pr-16 py-2.5 text-sm text-white placeholder-teal-300 focus:outline-none focus:ring-1 focus:ring-teal-500"
-              />
-              <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              <button className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded hover:bg-teal-700">
-                <svg className="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        <AgentTopbar onMenuClick={() => setSidebarOpen((o) => !o)} />
+
+        <div className="shrink-0 z-10 border-b border-gray-200/80 bg-gradient-to-r from-white/95 via-sky-50/50 to-white/95 backdrop-blur-md px-3 md:px-5 py-2.5 md:py-3 shadow-sm shadow-gray-200/30">
+          <div className="flex flex-wrap items-center gap-3 max-w-[2000px] mx-auto">
+            <div className="hidden lg:flex items-center gap-2 shrink-0 text-xs font-semibold text-sky-800">
+              <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" aria-hidden />
+              Live Chat
+            </div>
+            <div className="flex-1 min-w-[180px] max-w-xl mx-auto w-full">
+              <div className="relative w-full">
+                <input
+                  type="text"
+                  placeholder="Search name or mobile number"
+                  className="w-full bg-white/95 border-2 border-gray-200/90 rounded-xl pl-10 pr-12 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-400/40 focus:border-sky-500 transition"
+                />
+                <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-sky-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <button
+                  type="button"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg text-sky-600 hover:bg-sky-50 transition"
+                  aria-label="Filter"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 flex-shrink-0 max-w-full overflow-x-auto pb-0.5 md:pb-0 [scrollbar-width:thin]">
+              {agentsList.slice(0, 7).map((a) => {
+                const name = a?.name || a?.email || "";
+                const initial = name ? String(name).trim().slice(0, 2).toUpperCase() : "?";
+                const isAgentSelected =
+                  selectedAgent && (selectedAgent.id === a.id || (selectedAgent.email && selectedAgent.email === a.email));
+                return (
+                  <button
+                    key={a.id ?? a.email ?? initial}
+                    type="button"
+                    onClick={() => setSelectedAgent(a)}
+                    className={`w-9 h-9 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 border-2 transition-all duration-200 ${
+                      isAgentSelected
+                        ? "bg-gradient-to-br from-sky-500 to-blue-700 border-white text-white shadow-lg shadow-sky-500/40 ring-2 ring-sky-300/50 scale-105"
+                        : "bg-white border-gray-200 text-sky-800 hover:border-sky-300 hover:shadow-md"
+                    }`}
+                    title={name || "Agent"}
+                  >
+                    {initial}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                className="p-2 rounded-xl text-sky-600 hover:bg-sky-50 border border-transparent hover:border-sky-200 transition"
+                aria-label="More"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                 </svg>
               </button>
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {agentsList.slice(0, 7).map((a) => {
-              const name = a?.name || a?.email || "";
-              const initial = name ? String(name).trim().slice(0, 2).toUpperCase() : "?";
-              const isSelected = selectedAgent && (selectedAgent.id === a.id || (selectedAgent.email && selectedAgent.email === a.email));
-              return (
-                <button
-                  key={a.id ?? a.email ?? initial}
-                  type="button"
-                  onClick={() => setSelectedAgent(a)}
-                  className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0 border-2 transition-colors ${
-                    isSelected ? "bg-teal-600 border-white ring-2 ring-white" : "bg-teal-700 border-teal-900 text-teal-100 hover:bg-teal-600"
-                  }`}
-                  title={name || "Agent"}
-                >
-                  {initial}
-                </button>
-              );
-            })}
-            <button className="p-2 rounded-full hover:bg-teal-800" type="button">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-              </svg>
-            </button>
-          </div>
         </div>
 
-        <div className="flex-1 flex min-h-0">
-          <div className="w-80 bg-gray-100 border-r border-gray-200 flex flex-col flex-shrink-0">
-            <div className="flex bg-gray-200/80 p-1 gap-0.5 flex-shrink-0">
+        <div className="flex-1 flex min-h-0 relative overflow-hidden bg-gradient-to-b from-sky-50/80 via-white to-sky-100/40">
+          <div className="pointer-events-none absolute inset-0 overflow-hidden z-0" aria-hidden>
+            <div className="absolute -top-24 right-1/4 w-72 h-72 bg-sky-400/25 motion-page-blob" />
+            <div className="absolute bottom-0 left-1/4 w-64 h-64 bg-blue-400/20 motion-page-blob motion-page-blob--b" />
+          </div>
+
+          <div className="relative z-[1] flex flex-1 min-h-0 min-w-0">
+          <div className="w-80 flex flex-col flex-shrink-0 min-h-0 bg-white/90 backdrop-blur-sm border-r border-gray-200/80 shadow-sm shadow-gray-200/20">
+            <div className="flex p-1.5 gap-1 flex-shrink-0 bg-gradient-to-b from-gray-100/90 to-gray-50/80 border-b border-gray-200/60">
               <button
+                type="button"
                 onClick={() => setTab("active")}
-                className={`flex-1 py-2.5 text-xs font-semibold transition-colors rounded ${
-                  tab === "active" ? "bg-teal-700 text-white" : "text-teal-800 bg-transparent hover:bg-gray-300/50"
+                className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold uppercase tracking-wide transition-all duration-200 rounded-lg ${
+                  tab === "active"
+                    ? "bg-gradient-to-r from-sky-600 to-blue-700 text-white shadow-md shadow-sky-600/25 ring-1 ring-sky-400/30"
+                    : "text-sky-900/80 hover:bg-white/70"
                 }`}
               >
-                ACTIVE {tab === "active" ? `(${tabCount})` : ""}
+                Active {tab === "active" ? ` (${tabCount})` : ""}
               </button>
               <button
+                type="button"
                 onClick={() => setTab("requesting")}
-                className={`flex-1 py-2.5 text-xs font-semibold transition-colors rounded ${
-                  tab === "requesting" ? "bg-teal-700 text-white" : "text-teal-800 bg-transparent hover:bg-gray-300/50"
+                className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold uppercase tracking-wide transition-all duration-200 rounded-lg ${
+                  tab === "requesting"
+                    ? "bg-gradient-to-r from-sky-600 to-blue-700 text-white shadow-md shadow-sky-600/25 ring-1 ring-sky-400/30"
+                    : "text-sky-900/80 hover:bg-white/70"
                 }`}
               >
-                REQUESTING {tab === "requesting" ? `(${tabCount})` : ""}
+                Requesting {tab === "requesting" ? ` (${tabCount})` : ""}
               </button>
               <button
+                type="button"
                 onClick={() => setTab("intervened")}
-                className={`flex-1 py-2.5 text-xs font-semibold transition-colors rounded ${
-                  tab === "intervened" ? "bg-teal-700 text-white" : "text-teal-800 bg-transparent hover:bg-gray-300/50"
+                className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold uppercase tracking-wide transition-all duration-200 rounded-lg ${
+                  tab === "intervened"
+                    ? "bg-gradient-to-r from-sky-600 to-blue-700 text-white shadow-md shadow-sky-600/25 ring-1 ring-sky-400/30"
+                    : "text-sky-900/80 hover:bg-white/70"
                 }`}
               >
-                INTERVENED {tab === "intervened" ? `(${tabCount})` : ""}
+                Intervened {tab === "intervened" ? ` (${tabCount})` : ""}
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto bg-white">
+            <div className="flex-1 overflow-y-auto min-h-0 bg-white/50">
               {loadingChats ? (
-                <div className="p-4 text-center text-gray-500 text-sm">Loading chats...</div>
+                <div className="p-8 flex flex-col items-center justify-center gap-3 text-gray-500 text-sm motion-enter">
+                  <div className="h-8 w-8 rounded-full border-2 border-sky-200 border-t-sky-600 animate-spin" />
+                  Loading chats…
+                </div>
               ) : conversations.length === 0 ? (
-                <div className="p-4 text-center text-gray-500 text-sm">
+                <div className="p-8 text-center text-gray-500 text-sm motion-enter">
+                  <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-600">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                  </div>
                   No {tab} chats.
                 </div>
               ) : (
                 (conversations || []).map((conv) => {
-                  const isSelected = selectedChat?.id === conv.id;
+                  const isConvSelected = selectedChat?.id === conv.id;
                   const displayName = conv.customer_name || conv.phone || "Unknown";
                   return (
                     <div
                       key={conv.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => handleSelectChat(conv)}
-                      className={`w-full flex flex-col gap-2 p-3 text-left border-b border-gray-100 hover:bg-gray-50 cursor-pointer ${
-                        isSelected ? "bg-teal-50 border-l-4 border-l-teal-600" : ""
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleSelectChat(conv);
+                        }
+                      }}
+                      className={`w-full flex flex-col gap-2 p-3 text-left border-b border-gray-100/90 cursor-pointer transition-all duration-200 motion-card-rich ${
+                        isConvSelected
+                          ? "bg-gradient-to-r from-sky-50 to-white border-l-4 border-l-sky-600 shadow-inner"
+                          : "hover:bg-sky-50/60"
                       }`}
                     >
                       <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-10 h-10 rounded-full bg-teal-100 text-teal-800 flex items-center justify-center text-sm font-semibold flex-shrink-0">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-sky-100 to-sky-200 text-sky-800 flex items-center justify-center text-sm font-bold flex-shrink-0 ring-2 ring-white shadow-sm">
                           {getInitial(displayName)}
                         </div>
                         <div className="min-w-0 flex-1">
@@ -720,7 +789,7 @@ function LiveChatPage() {
                           <p className="text-xs text-gray-500 truncate">{conv.last_message || "—"}</p>
                         </div>
                         {conv.unread_count > 0 && (
-                          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-teal-600 text-white text-xs flex items-center justify-center">
+                          <span className="flex-shrink-0 min-w-[1.25rem] h-5 px-1 rounded-full bg-gradient-to-r from-sky-600 to-blue-600 text-white text-[10px] font-bold flex items-center justify-center shadow-md">
                             {conv.unread_count > 9 ? "9+" : conv.unread_count}
                           </span>
                         )}
@@ -729,7 +798,7 @@ function LiveChatPage() {
                         <button
                           type="button"
                           onClick={(e) => handleAcceptChat(e, conv)}
-                          className="w-full py-1.5 px-2 text-xs font-semibold rounded bg-teal-600 text-white hover:bg-teal-700"
+                          className="w-full py-2 px-2 text-xs font-bold rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-md shadow-sky-600/20 hover:from-sky-500 hover:to-blue-500 transition"
                         >
                           Accept chat
                         </button>
@@ -738,7 +807,7 @@ function LiveChatPage() {
                         <button
                           type="button"
                           onClick={(e) => handleAssignChat(e, conv)}
-                          className="w-full py-1.5 px-2 text-xs font-semibold rounded bg-indigo-600 text-white hover:bg-indigo-700"
+                          className="w-full py-2 px-2 text-xs font-bold rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-md shadow-violet-600/20 hover:from-violet-500 hover:to-indigo-500 transition"
                         >
                           Assign to agent
                         </button>
@@ -750,73 +819,87 @@ function LiveChatPage() {
             </div>
           </div>
 
-          <div className="flex-1 flex flex-col min-w-0 bg-[#f0f2f5] relative">
-            <div className="absolute inset-0 opacity-[0.03] pointer-events-none bg-[url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%23025f4b%22%3E%3Cpath d=%22M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z%22/%3E%3C/svg%3E')] bg-repeat bg-center" style={{ backgroundSize: "120px" }} />
-            <div className="flex-1 overflow-y-auto p-4 relative z-10">
+          <div className="flex-1 flex flex-col min-w-0 min-h-0 relative bg-white/40 backdrop-blur-[2px] border-x border-gray-200/60">
+            <div className="absolute inset-0 opacity-[0.04] pointer-events-none bg-[url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%230ea5e9%22%3E%3Cpath d=%22M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z%22/%3E%3C/svg%3E')] bg-repeat bg-center" style={{ backgroundSize: "100px" }} />
+            <div ref={chatScrollRef} className="flex-1 overflow-y-auto min-h-0 p-4 relative z-10">
               {error && (
-                <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                <div className="mb-3 motion-enter p-4 bg-red-50 border border-red-200/90 rounded-xl text-red-700 text-sm shadow-sm ring-1 ring-red-100/50">
                   {error}
                 </div>
               )}
               {!selectedChat ? (
-                <div className="flex items-center justify-center h-full text-gray-500">
-                  Select a conversation to view messages
+                <div className="flex flex-col items-center justify-center h-full min-h-[200px] text-gray-500 motion-enter px-4">
+                  <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-100 to-sky-200 text-sky-600 shadow-inner ring-2 ring-white">
+                    <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                  </div>
+                  <p className="text-sm font-medium text-gray-600">Select a conversation</p>
+                  <p className="text-xs text-gray-400 mt-1 text-center max-w-xs">Choose a chat from the list to view messages</p>
                 </div>
               ) : (
                 <>
-                  <div className="text-center text-xs text-gray-500 mb-4">
-                    {selectedChat.last_message_time
-                      ? `Last message · ${formatTime(selectedChat.last_message_time)}`
-                      : "No messages yet"}
+                  <div className="flex justify-center mb-4">
+                    <span className="text-xs font-medium text-sky-700/80 px-3 py-1.5 rounded-full bg-sky-50/80 border border-sky-100/80 max-w-md text-center">
+                      {selectedChat.last_message_time
+                        ? `Last message · ${formatTime(selectedChat.last_message_time)}`
+                        : "No messages yet"}
+                    </span>
                   </div>
                   {loadingMessages ? (
-                    <div className="text-center text-gray-500 py-8">Loading messages...</div>
+                    <div className="flex flex-col items-center justify-center py-12 text-gray-500 text-sm gap-3">
+                      <div className="h-8 w-8 rounded-full border-2 border-sky-200 border-t-sky-600 animate-spin" />
+                      Loading messages…
+                    </div>
                   ) : (
                     messages.map((msg, i) => (
                       <div
                         key={i}
-                        className={`flex ${msg.sender === "agent" ? "justify-end" : "justify-start"} mb-3`}
+                        className={`flex ${msg.sender === "agent" ? "justify-end" : "justify-start"} mb-3 motion-enter`}
                       >
                         <div className={`flex items-end gap-2 max-w-[75%] ${msg.sender === "agent" ? "flex-row-reverse" : ""}`}>
                           {msg.sender === "customer" && (
-                            <div className="w-8 h-8 rounded-full bg-teal-600 text-white flex items-center justify-center text-xs font-semibold flex-shrink-0">
+                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-sky-500 to-blue-600 text-white flex items-center justify-center text-xs font-bold flex-shrink-0 shadow-md ring-2 ring-white">
                               {getInitial(selectedChat.customer_name || selectedChat.phone)}
                             </div>
                           )}
                           {msg.sender === "agent" && (
-                            <div className="w-8 h-8 rounded-full bg-teal-800 text-white flex items-center justify-center text-xs font-semibold flex-shrink-0">
+                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-sky-700 to-slate-800 text-white flex items-center justify-center text-xs font-bold flex-shrink-0 shadow-md ring-2 ring-white">
                               A
                             </div>
                           )}
                           <div
-                            className={`rounded-2xl px-4 py-2 ${
+                            className={`rounded-2xl px-4 py-2.5 shadow-md ${
                               msg.sender === "agent"
-                                ? "bg-teal-800 text-white rounded-bl-md"
-                                : "bg-teal-100 text-gray-800 rounded-br-md"
+                                ? "bg-gradient-to-br from-sky-700 to-slate-800 text-white rounded-bl-md ring-1 ring-sky-600/30"
+                                : "bg-white text-gray-800 rounded-br-md border border-sky-100/90 ring-1 ring-gray-100/80"
                             }`}
                           >
-                            <p className="text-sm">{msg.message}</p>
+                            <p className="text-sm leading-relaxed">{msg.message}</p>
                             {msg.created_at && (
-                              <p className="text-xs opacity-75 mt-1">{formatTime(msg.created_at)}</p>
+                              <p className={`text-[10px] mt-1.5 ${msg.sender === "agent" ? "text-sky-200" : "text-gray-400"}`}>
+                                {formatTime(msg.created_at)}
+                              </p>
                             )}
                           </div>
                         </div>
                       </div>
                     ))
                   )}
+                  <div ref={messagesEndRef} />
                 </>
               )}
             </div>
             {selectedChat && (
-              <div className="p-4 border-t border-gray-200 bg-white flex gap-2 relative z-10 justify-center items-center flex-wrap">
-                <form onSubmit={handleSendMessage} className="flex flex-col gap-2 flex-1 min-w-[200px] max-w-xl">
+              <div className="p-4 border-t border-gray-200/80 bg-white/95 backdrop-blur-md flex gap-2 relative z-10 justify-center items-center flex-wrap shadow-[0_-4px_24px_-4px_rgba(14,165,233,0.08)]">
+                <form onSubmit={handleSendMessage} className="flex flex-col gap-2 flex-1 min-w-[200px] max-w-xl relative">
                   {isIntervened && (
                     <div className="flex items-center justify-end">
                       <button
                         type="button"
                         onClick={() => setInsertOpen((v) => !v)}
                         disabled={insertLoading || sending}
-                        className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs font-semibold text-gray-800 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="inline-flex items-center gap-2 px-3 py-2 bg-white border-2 border-gray-200/90 rounded-xl text-xs font-bold text-sky-800 hover:bg-sky-50 hover:border-sky-200 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-sm"
                         title="Insert canned messages / templates"
                       >
                         <span className="text-base leading-none">📋</span>
@@ -828,13 +911,13 @@ function LiveChatPage() {
                   {isIntervened && insertOpen && (
                     <div
                       ref={insertPopoverRef}
-                      className="absolute bottom-full right-4 mb-2 w-[360px] max-w-[92vw] bg-white border border-gray-200 rounded-xl shadow-xl z-[1000] overflow-hidden"
+                      className="motion-pop absolute bottom-full right-0 sm:right-4 mb-2 w-[360px] max-w-[92vw] bg-white border border-gray-100/90 rounded-2xl shadow-2xl shadow-sky-900/15 z-[1000] overflow-hidden ring-1 ring-black/5"
                     >
-                      <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between gap-2">
-                        <div className="text-sm font-semibold text-gray-900">Send quick message</div>
+                      <div className="px-4 py-3 bg-gradient-to-r from-slate-50 to-sky-50/60 border-b border-gray-100 flex items-center justify-between gap-2">
+                        <div className="text-sm font-bold text-gray-900">Send quick message</div>
                         <button
                           type="button"
-                          className="p-1 rounded hover:bg-gray-200 text-gray-600"
+                          className="w-8 h-8 rounded-xl hover:bg-white text-gray-500 hover:text-gray-900 transition border border-transparent hover:border-gray-200"
                           onClick={() => setInsertOpen(false)}
                           aria-label="Close"
                         >
@@ -844,21 +927,24 @@ function LiveChatPage() {
 
                       <div className="max-h-[320px] overflow-y-auto">
                         {insertLoading && (
-                          <div className="px-3 py-4 text-sm text-gray-500">Loading...</div>
+                          <div className="px-4 py-6 flex items-center gap-2 text-sm text-gray-500">
+                            <div className="h-5 w-5 rounded-full border-2 border-sky-200 border-t-sky-600 animate-spin" />
+                            Loading…
+                          </div>
                         )}
 
                         {!insertLoading && insertError && (
-                          <div className="px-3 py-2 text-xs text-red-600 border-b border-gray-100">{insertError}</div>
+                          <div className="px-4 py-2 text-xs text-red-600 border-b border-red-100 bg-red-50/50">{insertError}</div>
                         )}
 
                         {!insertLoading && (
                           <>
-                            <div className="px-3 py-2">
-                              <div className="text-xs font-semibold text-gray-500 mb-2">Canned Messages</div>
+                            <div className="px-4 py-3">
+                              <div className="text-xs font-bold text-sky-700 uppercase tracking-wide mb-2">Canned Messages</div>
                               {insertCannedOptions.length === 0 ? (
                                 <div className="text-xs text-gray-500">No canned messages.</div>
                               ) : (
-                                <div className="space-y-1">
+                                <div className="space-y-1.5">
                                   {insertCannedOptions.map((opt) => {
                                     const preview = String(opt.insertValue || "").trim();
                                     const previewText = preview.length > 48 ? `${preview.slice(0, 48)}...` : preview;
@@ -868,7 +954,7 @@ function LiveChatPage() {
                                         type="button"
                                         onClick={() => sendInsertItem(opt)}
                                         disabled={sending}
-                                        className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 border border-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-sky-50/80 border-2 border-gray-100 hover:border-sky-200/80 disabled:opacity-50 disabled:cursor-not-allowed transition"
                                       >
                                         <div className="text-sm font-semibold text-gray-900 truncate">{opt.label}</div>
                                         <div className="text-xs text-gray-500 truncate mt-0.5">{previewText || "—"}</div>
@@ -881,12 +967,12 @@ function LiveChatPage() {
 
                             <div className="border-t border-gray-100" />
 
-                            <div className="px-3 py-2">
-                              <div className="text-xs font-semibold text-gray-500 mb-2">Approved Templates</div>
+                            <div className="px-4 py-3">
+                              <div className="text-xs font-bold text-sky-700 uppercase tracking-wide mb-2">Approved Templates</div>
                               {insertTemplateOptions.length === 0 ? (
                                 <div className="text-xs text-gray-500">No approved templates.</div>
                               ) : (
-                                <div className="space-y-1">
+                                <div className="space-y-1.5">
                                   {insertTemplateOptions.map((opt) => {
                                     const preview = String(opt.insertValue || "").trim();
                                     const previewText = preview.length > 48 ? `${preview.slice(0, 48)}...` : preview;
@@ -896,7 +982,7 @@ function LiveChatPage() {
                                         type="button"
                                         onClick={() => sendInsertItem(opt)}
                                         disabled={sending}
-                                        className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 border border-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-sky-50/80 border-2 border-gray-100 hover:border-sky-200/80 disabled:opacity-50 disabled:cursor-not-allowed transition"
                                       >
                                         <div className="text-sm font-semibold text-gray-900 truncate">{opt.label}</div>
                                         <div className="text-xs text-gray-500 truncate mt-0.5">{previewText || "—"}</div>
@@ -918,15 +1004,15 @@ function LiveChatPage() {
                       value={messageText}
                       onChange={(e) => setMessageText(e.target.value)}
                       placeholder="Type a message..."
-                      className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent outline-none"
+                      className="flex-1 px-4 py-2.5 border-2 border-gray-200/90 rounded-xl bg-white/90 focus:ring-2 focus:ring-sky-400/40 focus:border-sky-500 outline-none transition shadow-sm"
                       disabled={sending}
                     />
                     <button
                       type="submit"
                       disabled={!messageText.trim() || sending}
-                      className="px-5 py-2 rounded-lg bg-teal-600 text-white font-medium text-sm hover:bg-teal-700 disabled:opacity-50"
+                      className="relative overflow-hidden px-5 py-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-700 text-white font-semibold text-sm shadow-lg shadow-sky-600/25 hover:from-sky-500 hover:to-blue-600 disabled:opacity-50 transition-all"
                     >
-                      {sending ? "Sending..." : "Send"}
+                      <span className="relative z-10">{sending ? "Sending…" : "Send"}</span>
                     </button>
                   </div>
                 </form>
@@ -934,20 +1020,21 @@ function LiveChatPage() {
             )}
           </div>
 
-          <div className="w-80 bg-white border-l border-gray-200 flex flex-col overflow-y-auto flex-shrink-0">
-            <div className="p-4 border-b border-gray-200">
-              <h3 className="font-semibold text-gray-800">Chat Profile</h3>
+          <div className="w-80 flex flex-col overflow-y-auto flex-shrink-0 min-h-0 bg-white/90 backdrop-blur-sm border-l border-gray-200/80 shadow-sm">
+            <div className="p-4 border-b border-gray-200/80 bg-gradient-to-r from-slate-50/80 to-sky-50/40">
+              <h3 className="font-bold text-gray-900 tracking-tight">Chat Profile</h3>
+              <p className="text-xs text-sky-700/80 mt-0.5">Contact details</p>
             </div>
             {selectedChat ? (
               <>
-                <div className="p-4 flex flex-col items-center">
-                  <div className="w-20 h-20 rounded-full bg-teal-100 text-teal-800 flex items-center justify-center text-2xl font-bold mb-2">
+                <div className="p-4 flex flex-col items-center border-b border-gray-100/80">
+                  <div className="w-20 h-20 rounded-full bg-gradient-to-br from-sky-400 to-blue-700 text-white flex items-center justify-center text-2xl font-bold mb-3 shadow-lg shadow-sky-500/30 ring-4 ring-sky-100">
                     {getInitial(selectedChat.customer_name || selectedChat.phone)}
                   </div>
-                  <p className="font-semibold text-gray-900">{selectedChat.customer_name || selectedChat.phone}</p>
-                  <p className="text-teal-600 font-semibold text-sm">+{selectedChat.phone}</p>
+                  <p className="font-bold text-gray-900 text-center">{selectedChat.customer_name || selectedChat.phone}</p>
+                  <p className="text-sky-600 font-semibold text-sm mt-1">+{selectedChat.phone}</p>
                 </div>
-                <div className="px-4 pb-4 space-y-2 text-sm">
+                <div className="px-4 pb-4 space-y-0 text-sm">
                   {[
                     { label: "Status", value: "Active" },
                     { label: "Last Active", value: formatTime(selectedChat.last_message_time) },
@@ -955,20 +1042,21 @@ function LiveChatPage() {
                     { label: "Unread", value: String(selectedChat.unread_count ?? 0) },
                     { label: "Source", value: "WhatsApp" },
                   ].map((row, i) => (
-                    <div key={i} className="flex justify-between py-1.5 border-b border-gray-100">
-                      <span className="text-gray-500">{row.label}</span>
-                      <span className="text-gray-800 font-medium">{row.value}</span>
+                    <div key={i} className="flex justify-between py-2.5 border-b border-gray-100/90">
+                      <span className="text-gray-500 text-xs font-medium">{row.label}</span>
+                      <span className="text-gray-900 font-semibold text-xs text-right">{row.value}</span>
                     </div>
                   ))}
-                  <div className="flex justify-between items-center py-1.5 border-b border-gray-100">
-                    <span className="text-gray-500">Opted In</span>
+                  <div className="flex justify-between items-center py-2.5 border-b border-gray-100/90">
+                    <span className="text-gray-500 text-xs font-medium">Opted In</span>
                     <button
+                      type="button"
                       role="switch"
                       aria-checked={optedIn}
                       onClick={() => setOptedIn(!optedIn)}
-                      className={`relative w-10 h-6 rounded-full transition-colors ${optedIn ? "bg-teal-500" : "bg-gray-300"}`}
+                      className={`relative w-11 h-6 rounded-full transition-colors shadow-inner ${optedIn ? "bg-gradient-to-r from-sky-500 to-blue-600" : "bg-gray-300"}`}
                     >
-                      <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${optedIn ? "left-5" : "left-1"}`} />
+                      <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow-md transition-transform ${optedIn ? "left-6" : "left-1"}`} />
                     </button>
                   </div>
                 </div>
@@ -976,26 +1064,30 @@ function LiveChatPage() {
                   const key = title.toLowerCase();
                   const isOpen = openSections[key];
                   return (
-                    <div key={title} className="border-t border-gray-200">
+                    <div key={title} className="border-t border-gray-200/80">
                       <button
+                        type="button"
                         onClick={() => toggleSection(key)}
-                        className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-medium text-gray-800 hover:bg-gray-50"
+                        className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-bold text-gray-800 hover:bg-sky-50/50 transition"
                       >
                         {title}
-                        <svg className={`w-5 h-5 text-gray-500 transition-transform ${isOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className={`w-5 h-5 text-sky-600 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                       </button>
                       {isOpen && (
-                        <div className="px-4 pb-3 text-sm text-gray-500">No {title.toLowerCase()} data.</div>
+                        <div className="px-4 pb-3 text-sm text-gray-500 motion-enter">No {title.toLowerCase()} data.</div>
                       )}
                     </div>
                   );
                 })}
               </>
             ) : (
-              <div className="p-4 text-center text-gray-500 text-sm">Select a chat to view profile.</div>
+              <div className="p-6 text-center text-gray-500 text-sm motion-enter">
+                <p>Select a chat to view profile.</p>
+              </div>
             )}
+          </div>
           </div>
         </div>
       </div>

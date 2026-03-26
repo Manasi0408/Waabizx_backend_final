@@ -3,6 +3,14 @@ const { WebhookLog, MetaMessage, Contact, Message, InboxMessage, User, WhatsAppA
 const { Op } = require('sequelize');
 const socketService = require('../services/socketService');
 const db = require('../config/db'); // MySQL pool for conversations/agent routing
+const { sendText } = require('../services/whatsappService');
+const { upsertConversationWithQuota } = require('../services/conversationBillingService');
+
+// Defaults shown in the Opt-in Management UI
+const OPT_IN_MESSAGE =
+  'Thanks! You have been opted in for future marketing messages. You will now receive updates and notifications related to this project.';
+const OPT_OUT_MESSAGE =
+  'You have been opted out of your future marketing messages. If you would like to receive messages again, reply APPLY above US/APPLY.';
 
 // VERIFY WEBHOOK (for WhatsApp/Meta webhook verification)
 exports.verifyWebhook = (req, res) => {
@@ -180,6 +188,11 @@ exports.handleWebhook = async (req, res) => {
           attributes: ['id', 'phone', 'name', 'email', 'status', 'tags', 'country', 'lastContacted', 'notes', 'userId', 'whatsappOptInAt', 'createdAt', 'updatedAt']
         });
 
+        const wasNewContact = !contact;
+        const oldOptedOut = contact
+          ? contact.status === 'unsubscribed' || !contact.whatsappOptInAt
+          : false;
+
         let userId;
 
         if (contact) {
@@ -219,15 +232,56 @@ exports.handleWebhook = async (req, res) => {
           console.log('   User ID:', userId);
         }
 
-          // WhatsApp Keyword Opt-in: START or YES = user consent (Meta-friendly)
+          // WhatsApp keyword consent handling:
+          // - START/YES => opt-in
+          // - STOP/UNSUBSCRIBE/CANCEL => opt-out
           const normalizedText = (text || '').trim().toUpperCase();
-          if (normalizedText === 'START' || normalizedText === 'YES') {
+          const optOutKeywords = ['STOP', 'UNSUBSCRIBE', 'CANCEL'];
+          const isOptOut =
+            optOutKeywords.includes(normalizedText) ||
+            optOutKeywords.some((k) => normalizedText.includes(k));
+
+          if (isOptOut) {
+            await contact.update({
+              status: 'unsubscribed',
+              whatsappOptInAt: null
+            });
+          } else if (
+            wasNewContact ||
+            normalizedText === 'START' ||
+            normalizedText === 'YES' ||
+            normalizedText === 'HI'
+          ) {
             const optInUpdate = { status: 'active' };
             if (!contact.whatsappOptInAt) {
               optInUpdate.whatsappOptInAt = new Date();
-              console.log('✅ Keyword opt-in: user sent "' + normalizedText + '" – consent recorded (whatsappOptInAt set)');
+              console.log('✅ Keyword opt-in: consent recorded (whatsappOptInAt set)');
             }
             await contact.update(optInUpdate);
+          }
+
+          // Auto-reply on first consent change:
+          // - First message for new contact => send opt-in response
+          // - STOP/UNSUBSCRIBE/CANCEL => send opt-out response (only if not already opted out)
+          let billingAllowed = true;
+          try {
+            const billing = await upsertConversationWithQuota(userId, fromNumber);
+            billingAllowed = !!billing.allowed;
+          } catch (billingErr) {
+            // If billing tracking fails, don't break webhook processing.
+            console.error('Conversation billing check failed (metaWebhookController):', billingErr?.message || billingErr);
+          }
+
+          try {
+            if (billingAllowed) {
+              if (!isOptOut && normalizedText === 'HI') {
+                await sendText(fromNumber, OPT_IN_MESSAGE);
+              } else if (isOptOut && !oldOptedOut) {
+                await sendText(fromNumber, OPT_OUT_MESSAGE);
+              }
+            }
+          } catch (e) {
+            console.error('Auto reply sendText failed:', e?.message || e);
           }
 
           // Save message to Message table (for inbox compatibility)
@@ -390,6 +444,11 @@ exports.handleWebhook = async (req, res) => {
           attributes: ['id', 'phone', 'name', 'email', 'status', 'tags', 'country', 'lastContacted', 'notes', 'userId', 'whatsappOptInAt', 'createdAt', 'updatedAt']
         });
 
+        const wasNewContact = !contact;
+        const oldOptedOut = contact
+          ? contact.status === 'unsubscribed' || !contact.whatsappOptInAt
+          : false;
+
         let userId;
 
         if (contact) {
@@ -429,15 +488,55 @@ exports.handleWebhook = async (req, res) => {
           console.log('   User ID:', userId);
         }
 
-          // WhatsApp Keyword Opt-in: START or YES = user consent (Meta-friendly)
+          // WhatsApp keyword consent handling:
+          // - START/YES => opt-in
+          // - STOP/UNSUBSCRIBE/CANCEL => opt-out
           const normalizedTextAi = (text || '').trim().toUpperCase();
-          if (normalizedTextAi === 'START' || normalizedTextAi === 'YES') {
+          const optOutKeywords = ['STOP', 'UNSUBSCRIBE', 'CANCEL'];
+          const isOptOut =
+            optOutKeywords.includes(normalizedTextAi) ||
+            optOutKeywords.some((k) => normalizedTextAi.includes(k));
+
+          if (isOptOut) {
+            await contact.update({
+              status: 'unsubscribed',
+              whatsappOptInAt: null
+            });
+          } else if (
+            wasNewContact ||
+            normalizedTextAi === 'START' ||
+            normalizedTextAi === 'YES' ||
+            normalizedTextAi === 'HI'
+          ) {
             const optInUpdateAi = { status: 'active' };
             if (!contact.whatsappOptInAt) {
               optInUpdateAi.whatsappOptInAt = new Date();
               console.log('✅ Keyword opt-in (AiSensy): user sent "' + normalizedTextAi + '" – consent recorded (whatsappOptInAt set)');
             }
             await contact.update(optInUpdateAi);
+          }
+
+          // Auto-reply on first consent change:
+          // - First message for new contact => send opt-in response
+          // - STOP/UNSUBSCRIBE/CANCEL => send opt-out response (only if not already opted out)
+          let billingAllowedAi = true;
+          try {
+            const billing = await upsertConversationWithQuota(userId, phone);
+            billingAllowedAi = !!billing.allowed;
+          } catch (billingErr) {
+            console.error('Conversation billing check failed (metaWebhookController AiSensy):', billingErr?.message || billingErr);
+          }
+
+          try {
+            if (billingAllowedAi) {
+              if (!isOptOut && normalizedTextAi === 'HI') {
+                await sendText(phone, OPT_IN_MESSAGE);
+              } else if (isOptOut && !oldOptedOut) {
+                await sendText(phone, OPT_OUT_MESSAGE);
+              }
+            }
+          } catch (e) {
+            console.error('Auto reply sendText failed (AiSensy):', e?.message || e);
           }
 
           // 🔹 4. Save message to Message table (for inbox compatibility)

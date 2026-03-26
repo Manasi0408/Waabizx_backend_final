@@ -8,6 +8,7 @@ import {
   updateContact,
   deleteContact,
   optOutContact,
+  optInContact,
   getContactById
 } from '../services/contactService';
 import MainSidebarNav from '../components/MainSidebarNav';
@@ -251,6 +252,18 @@ function Contacts() {
     }
   };
 
+  const handleOptInContact = async (contactId) => {
+    try {
+      await optInContact(contactId);
+      setSuccess('Contact opted in successfully!');
+      setSelectedContact(null);
+      fetchContacts();
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (error) {
+      setError(error.message || 'Failed to opt-in contact');
+    }
+  };
+
   const openEditModal = async (contact) => {
     try {
       const fullContact = await getContactById(contact.id);
@@ -299,11 +312,24 @@ function Contacts() {
     setFilters({ ...filters, search: e.target.value, page: 1 });
   };
 
+  const getContactInitials = (name, phone) => {
+    const n = String(name || '').trim();
+    if (n) {
+      const parts = n.split(/\s+/).filter(Boolean);
+      if (parts.length >= 2) {
+        return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+      }
+      return n.slice(0, 2).toUpperCase();
+    }
+    const p = String(phone || '').replace(/\D/g, '');
+    return p.length >= 2 ? p.slice(-2) : '?';
+  };
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+      <div className="min-h-screen bg-gradient-to-b from-sky-50/90 via-white to-sky-100/50 flex items-center justify-center">
+        <div className="text-center motion-enter">
+          <div className="animate-spin rounded-full h-12 w-12 border-2 border-sky-200 border-t-sky-600 mx-auto" />
           <p className="mt-4 text-gray-600">Loading...</p>
         </div>
       </div>
@@ -315,47 +341,50 @@ function Contacts() {
 
   return (
     <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
-      {/* Top Navigation Bar */}
-      <header className="shrink-0 bg-white border-b border-gray-200 px-4 md:px-6 py-4 flex justify-between items-center shadow-sm">
-        <div className="flex items-center gap-4">
+      <header className="motion-header-enter shrink-0 z-10 bg-white/90 backdrop-blur-md border-b border-gray-200/80 px-4 md:px-8 py-3.5 md:py-4 flex justify-between items-center shadow-sm shadow-gray-200/50">
+        <div className="flex items-center gap-4 min-w-0">
           <button
+            type="button"
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="p-2 rounded-lg hover:bg-gray-100 transition lg:hidden"
+            className="p-2.5 rounded-xl hover:bg-gray-100/80 active:scale-95 transition lg:hidden"
+            aria-label="Toggle sidebar"
           >
             <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-          
-          <Link to="/dashboard" className="flex items-center gap-3 hover:opacity-80 transition">
-            <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-blue-800 rounded-lg flex items-center justify-center">
+
+          <Link to="/dashboard" className="flex items-center gap-3 transition-all duration-300 hover:opacity-90 hover:scale-[1.02] active:scale-[0.98] shrink-0">
+            <div className="w-10 h-10 bg-gradient-to-br from-sky-500 via-sky-600 to-blue-900 rounded-xl flex items-center justify-center shadow-lg shadow-sky-500/30 ring-2 ring-white">
               <span className="text-white font-bold text-lg">A</span>
             </div>
-            <h1 className="text-xl md:text-2xl font-bold text-gray-800 hidden sm:block">AiSensy</h1>
+            <h1 className="text-xl md:text-2xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent hidden sm:block">
+              AiSensy
+            </h1>
           </Link>
-          
-          <span className="text-gray-400 hidden md:block">|</span>
-          <h2 className="text-lg font-semibold text-gray-600 hidden md:block">Contacts</h2>
+
+          <span className="text-gray-300 hidden md:block shrink-0">|</span>
+          <h2 className="text-lg font-semibold text-sky-700 hidden md:block tracking-tight">Contacts</h2>
         </div>
-        
+
         <div className="flex items-center gap-3 md:gap-4">
-          {/* Notifications */}
           <div className="relative" ref={notificationRef}>
             <button
+              type="button"
               onClick={() => {
                 setNotificationDropdownOpen(!notificationDropdownOpen);
                 if (!notificationDropdownOpen) {
                   fetchNotifications(true);
                 }
               }}
-              className="relative w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center cursor-pointer hover:bg-gray-200 transition focus:outline-none"
+              className="relative w-10 h-10 rounded-full bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200/80 flex items-center justify-center cursor-pointer hover:from-sky-50 hover:to-sky-100/80 hover:border-sky-200/70 hover:shadow-md transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-sky-400/40"
             >
               <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
               </svg>
               {unreadCount > 0 && (
                 <>
-                  <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>
+                  <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white" />
                   <span className="absolute -top-1 -right-1 min-w-[20px] h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center px-1.5 border-2 border-white shadow-sm">
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
@@ -364,8 +393,8 @@ function Contacts() {
             </button>
 
             {notificationDropdownOpen && (
-              <div className="absolute right-0 mt-2 w-80 md:w-96 bg-white rounded-lg shadow-xl border border-gray-200 z-50 max-h-[500px] flex flex-col">
-                <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between bg-gray-50">
+              <div className="motion-pop absolute right-0 mt-3 w-80 md:w-96 bg-white rounded-2xl shadow-2xl shadow-gray-900/10 border border-gray-100 z-50 max-h-[500px] flex flex-col overflow-hidden ring-1 ring-black/5 origin-top-right">
+                <div className="px-4 py-3.5 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-slate-50 to-gray-50/80">
                   <div className="flex items-center gap-2">
                     <h3 className="text-sm font-semibold text-gray-800">Notifications</h3>
                     {unreadCount > 0 && (
@@ -376,11 +405,12 @@ function Contacts() {
                   </div>
                   {unreadCount > 0 && (
                     <button
+                      type="button"
                       onClick={async () => {
                         await handleMarkAllAsRead();
                         fetchNotifications();
                       }}
-                      className="text-xs text-blue-600 hover:text-blue-700 font-medium transition"
+                      className="text-xs text-sky-600 hover:text-sky-700 font-medium transition"
                     >
                       Mark all as read
                     </button>
@@ -389,7 +419,7 @@ function Contacts() {
                 <div className="overflow-y-auto flex-1">
                   {loadingNotifications ? (
                     <div className="px-4 py-8 text-center">
-                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                      <div className="animate-spin rounded-full h-8 w-8 border-2 border-sky-200 border-t-sky-600 mx-auto" />
                       <p className="mt-2 text-sm text-gray-500">Loading notifications...</p>
                     </div>
                   ) : notifications.length === 0 ? (
@@ -404,20 +434,24 @@ function Contacts() {
                       {notifications.map((notification) => (
                         <button
                           key={notification.id}
+                          type="button"
                           onClick={() => handleNotificationClick(notification)}
                           className={`w-full px-4 py-3 text-left hover:bg-gray-50 transition border-l-4 ${
-                            !notification.is_read 
-                              ? 'bg-blue-50 border-blue-500' 
-                              : 'bg-white border-transparent'
+                            !notification.is_read ? 'bg-blue-50 border-blue-500' : 'bg-white border-transparent'
                           }`}
                         >
                           <div className="flex items-start gap-3">
-                            <div className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${
-                              notification.type === 'campaign' ? 'bg-blue-100' :
-                              notification.type === 'template' ? 'bg-green-100' :
-                              notification.type === 'message' ? 'bg-purple-100' :
-                              'bg-gray-100'
-                            }`}>
+                            <div
+                              className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${
+                                notification.type === 'campaign'
+                                  ? 'bg-blue-100'
+                                  : notification.type === 'template'
+                                    ? 'bg-green-100'
+                                    : notification.type === 'message'
+                                      ? 'bg-purple-100'
+                                      : 'bg-gray-100'
+                              }`}
+                            >
                               {notification.type === 'campaign' && (
                                 <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
@@ -442,22 +476,20 @@ function Contacts() {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start justify-between gap-2">
                                 <div className="flex-1">
-                                  <p className={`text-sm font-medium ${
-                                    !notification.is_read ? 'text-gray-900' : 'text-gray-700'
-                                  }`}>
+                                  <p
+                                    className={`text-sm font-medium ${
+                                      !notification.is_read ? 'text-gray-900' : 'text-gray-700'
+                                    }`}
+                                  >
                                     {notification.title}
                                   </p>
-                                  <p className="text-xs text-gray-500 mt-1 line-clamp-2">
-                                    {notification.body}
-                                  </p>
+                                  <p className="text-xs text-gray-500 mt-1 line-clamp-2">{notification.body}</p>
                                 </div>
                                 {!notification.is_read && (
-                                  <div className="flex-shrink-0 w-2 h-2 bg-blue-600 rounded-full mt-1"></div>
+                                  <div className="flex-shrink-0 w-2 h-2 bg-blue-600 rounded-full mt-1" />
                                 )}
                               </div>
-                              <p className="text-xs text-gray-400 mt-1">
-                                {formatTime(notification.created_at)}
-                              </p>
+                              <p className="text-xs text-gray-400 mt-1">{formatTime(notification.created_at)}</p>
                             </div>
                           </div>
                         </button>
@@ -472,58 +504,63 @@ function Contacts() {
           <button
             type="button"
             onClick={() => navigate('/settings')}
-            className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-semibold hover:from-blue-600 hover:to-blue-700 transition shadow-md"
+            className="w-10 h-10 rounded-full bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 flex items-center justify-center cursor-pointer shadow-md shadow-sky-500/35 hover:shadow-lg hover:ring-2 ring-sky-300/60 hover:scale-[1.03] transition-all duration-200 focus:outline-none"
           >
-            {userInitial}
+            <span className="text-white font-semibold text-sm">{userInitial}</span>
           </button>
         </div>
       </header>
 
       <div className="flex flex-1 min-h-0">
         {/* Sidebar */}
-        <aside className={`bg-teal-900 text-white border-r border-teal-800 h-full shrink-0 flex flex-col overflow-hidden transition-all duration-300 ${sidebarOpen ? 'w-20' : 'w-0 md:w-20'}`}>
+        <aside className={`bg-sky-950 text-white border-r border-sky-900 h-full shrink-0 flex flex-col overflow-hidden transition-all duration-300 ${sidebarOpen ? 'w-20' : 'w-0 md:w-20'}`}>
           <MainSidebarNav />
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 min-h-0 overflow-y-auto p-6 md:p-8">
-          {/* Success/Error Messages */}
+        <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-sky-50/90 via-white to-sky-100/50">
+          <div className="relative isolate p-4 md:p-8 lg:p-10 max-w-[1600px] mx-auto">
+          <div className="pointer-events-none absolute inset-0 overflow-hidden -z-10" aria-hidden>
+            <div className="absolute -top-28 -right-20 w-[22rem] h-[22rem] bg-sky-400/30 motion-page-blob" />
+            <div className="absolute -bottom-36 -left-24 w-[20rem] h-[20rem] bg-blue-400/25 motion-page-blob motion-page-blob--b" />
+          </div>
+          <div className="relative z-0">
           {success && (
-            <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+            <div className="motion-enter mb-6 p-4 bg-green-50 border border-green-200/90 rounded-xl shadow-sm ring-1 ring-green-100/50">
               <p className="text-green-600 text-sm">{success}</p>
             </div>
           )}
           {error && (
-            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+            <div className="motion-enter mb-6 p-4 bg-red-50 border border-red-200/90 rounded-xl shadow-sm ring-1 ring-red-100/50">
               <p className="text-red-600 text-sm">{error}</p>
             </div>
           )}
 
-          {/* Header with Create Button */}
-          <div className="mb-6 flex items-center justify-between">
+          <div className="motion-enter mb-6 md:mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-2xl font-bold text-gray-800 mb-2">Contacts</h2>
-              <p className="text-gray-600">Manage your WhatsApp contacts</p>
+              <h2 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2 tracking-tight">Contacts</h2>
+              <p className="text-gray-600 text-sm md:text-base">Manage your WhatsApp contacts</p>
             </div>
             <div className="flex items-center gap-3">
               <button
+                type="button"
                 onClick={() => {
                   setFormData({ phone: '', name: '', email: '', tags: '', country: '' });
                   setShowCreateModal(true);
                   setError('');
                 }}
-                className="bg-gradient-to-r from-blue-600 to-blue-700 text-white px-6 py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-blue-800 transition shadow-md hover:shadow-lg flex items-center gap-2"
+                className="group relative overflow-hidden shrink-0 bg-gradient-to-r from-sky-600 via-sky-500 to-blue-600 text-white px-5 py-3 sm:px-6 rounded-xl font-semibold shadow-lg shadow-sky-600/30 hover:shadow-xl hover:shadow-sky-500/35 hover:scale-[1.02] active:scale-[0.98] transition-all duration-300 flex items-center gap-2"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <span className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/15 to-white/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" aria-hidden />
+                <svg className="w-5 h-5 relative" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
-                Add Contact
+                <span className="relative">Add Contact</span>
               </button>
             </div>
           </div>
 
-          {/* Filters and Search */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
+          <div className="motion-enter motion-delay-1 bg-white rounded-2xl shadow-lg shadow-gray-200/40 border border-gray-100/90 p-4 md:p-5 mb-6 md:mb-8 ring-1 ring-gray-100/80 motion-hover-lift hover:shadow-xl">
             <div className="flex flex-wrap gap-4">
               <div className="flex-1 min-w-[200px]">
                 <label className="block text-sm font-medium text-gray-700 mb-2">Search</label>
@@ -533,7 +570,7 @@ function Contacts() {
                   value={filters.search}
                   onChange={handleSearchChange}
                   placeholder="Search by name, phone, or email..."
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                  className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none bg-gray-50/80 hover:bg-white transition-all shadow-sm text-sm"
                 />
               </div>
               <div className="flex-1 min-w-[200px]">
@@ -542,7 +579,7 @@ function Contacts() {
                   name="status"
                   value={filters.status}
                   onChange={handleFilterChange}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                  className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none bg-gray-50/80 hover:bg-white transition-all cursor-pointer text-sm font-medium text-gray-700 shadow-sm"
                 >
                   <option value="">All Status</option>
                   <option value="active">Active</option>
@@ -556,7 +593,7 @@ function Contacts() {
                   name="type"
                   value={filters.type}
                   onChange={handleFilterChange}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                  className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none bg-gray-50/80 hover:bg-white transition-all cursor-pointer text-sm font-medium text-gray-700 shadow-sm"
                 >
                   <option value="">All</option>
                   <option value="opted_in">Opted-in</option>
@@ -566,141 +603,167 @@ function Contacts() {
             </div>
           </div>
 
-          {/* Contacts List */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="motion-enter motion-delay-2">
             {loadingContacts ? (
-              <div className="p-12 text-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+              <div className="rounded-2xl bg-white/80 backdrop-blur-sm border border-gray-100/90 shadow-lg shadow-gray-200/40 ring-1 ring-gray-100/80 p-12 text-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-2 border-sky-200 border-t-sky-600 mx-auto" />
                 <p className="mt-4 text-gray-600">Loading contacts...</p>
               </div>
             ) : contacts.length === 0 ? (
-              <div className="p-12 text-center">
-                <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="rounded-2xl bg-white/80 backdrop-blur-sm border border-gray-100/90 shadow-lg shadow-gray-200/40 ring-1 ring-gray-100/80 p-12 text-center motion-enter">
+                <svg className="w-16 h-16 text-sky-200 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                 </svg>
                 <p className="text-gray-600 mb-4">No contacts found</p>
                 <button
+                  type="button"
                   onClick={() => {
                     setFormData({ phone: '', name: '', email: '', tags: '', country: '' });
                     setShowCreateModal(true);
                   }}
-                  className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition"
+                  className="bg-sky-600 text-white px-6 py-2.5 rounded-xl hover:bg-sky-700 transition-all duration-300 shadow-md shadow-sky-600/25 hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] font-medium"
                 >
                   Add Your First Contact
                 </button>
               </div>
             ) : (
               <>
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Name</th>
-                        <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Phone</th>
-                        <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Email</th>
-                        <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Status</th>
-                        <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Tags</th>
-                        <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Country</th>
-                        <th className="px-6 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {contacts.map((contact) => (
-                        <tr key={contact.id} className="hover:bg-gray-50 transition">
-                          <td className="px-6 py-4">
-                            <p className="text-sm font-semibold text-gray-900">{contact.name || 'N/A'}</p>
-                          </td>
-                          <td className="px-6 py-4">
-                            <p className="text-sm text-gray-700">{contact.phone}</p>
-                          </td>
-                          <td className="px-6 py-4">
-                            <p className="text-sm text-gray-700">{contact.email || 'N/A'}</p>
-                          </td>
-                          <td className="px-6 py-4">
-                            <span className={`px-3 py-1 text-xs font-semibold rounded-full ${getStatusColor(contact.status)}`}>
-                              {getStatusLabel(contact.status)}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex flex-wrap gap-1">
+                <div className="bg-white rounded-2xl shadow-lg shadow-gray-200/50 border border-gray-100/90 overflow-hidden ring-1 ring-gray-100/80">
+                  <div className="p-4 md:p-6 space-y-3 md:space-y-4">
+                    {contacts.map((contact) => (
+                      <article
+                        key={contact.id}
+                        className="group relative flex min-h-0 flex-row rounded-2xl border border-gray-100/90 bg-white shadow-sm shadow-gray-200/40 ring-1 ring-gray-100/80 overflow-hidden motion-hover-lift hover:shadow-xl hover:border-sky-100/90 transition-all duration-300"
+                      >
+                        <div
+                          className="w-1.5 shrink-0 self-stretch bg-gradient-to-b from-sky-400 via-sky-500 to-blue-600 opacity-95"
+                          aria-hidden
+                        />
+                        <div className="flex min-w-0 flex-1 flex-col gap-3 p-4 sm:p-4 lg:flex-row lg:items-center lg:gap-5 xl:gap-6">
+                          <div className="min-w-0 flex-1 lg:max-w-md xl:max-w-lg">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="shrink-0 w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 text-white font-bold text-xs flex items-center justify-center shadow-md shadow-sky-500/30 ring-2 ring-white">
+                                {getContactInitials(contact.name, contact.phone)}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2 gap-y-1">
+                                  <h3 className="text-base font-semibold text-gray-900 leading-snug line-clamp-2 min-w-0">
+                                    {contact.name || 'N/A'}
+                                  </h3>
+                                  <span className={`shrink-0 px-2.5 py-0.5 text-xs font-semibold rounded-full ${getStatusColor(contact.status)}`}>
+                                    {getStatusLabel(contact.status)}
+                                  </span>
+                                </div>
+                                <p className="text-xs text-gray-500 mt-1 line-clamp-2 break-all">
+                                  {contact.phone}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-2 text-xs text-gray-600">
+                              <span>
+                                <span className="font-medium text-gray-500">Email</span>{' '}
+                                {contact.email || 'N/A'}
+                              </span>
+                              <span className="text-gray-300" aria-hidden>
+                                |
+                              </span>
+                              <span>
+                                <span className="font-medium text-gray-500">Country</span>{' '}
+                                {contact.country || 'N/A'}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5 mt-2">
                               {Array.isArray(contact.tags) && contact.tags.length > 0 ? (
-                                contact.tags.slice(0, 2).map((tag, idx) => (
-                                  <span key={idx} className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded">
+                                contact.tags.map((tag, idx) => (
+                                  <span key={idx} className="px-2 py-0.5 bg-sky-50 text-sky-800 text-xs font-medium rounded-lg border border-sky-100/80">
                                     {tag}
                                   </span>
                                 ))
                               ) : (
                                 <span className="text-xs text-gray-400">No tags</span>
                               )}
-                              {Array.isArray(contact.tags) && contact.tags.length > 2 && (
-                                <span className="text-xs text-gray-500">+{contact.tags.length - 2}</span>
-                              )}
                             </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <p className="text-sm text-gray-700">{contact.country || 'N/A'}</p>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center justify-end gap-2">
-                              {contact.status !== 'unsubscribed' && (
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-1.5 border-t border-gray-100 pt-3 lg:flex-nowrap lg:justify-end lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0 xl:min-w-[190px]">
+                            {(() => {
+                              const optedOut = contact.status === 'unsubscribed' || !contact.whatsappOptInAt;
+                              if (optedOut) {
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOptInContact(contact.id)}
+                                    className="px-3 py-1.5 bg-sky-600 text-white text-xs font-medium rounded-lg hover:bg-sky-700 transition-all duration-200 active:scale-95 shadow-sm hover:shadow"
+                                    title="Opt-in"
+                                  >
+                                    Opt-in
+                                  </button>
+                                );
+                              }
+
+                              return (
                                 <button
+                                  type="button"
                                   onClick={() => {
                                     setSelectedContact(contact);
                                     setShowOptOutModal(true);
                                   }}
-                                  className="px-3 py-1.5 bg-orange-600 text-white text-xs font-medium rounded-lg hover:bg-orange-700 transition"
+                                  className="px-3 py-1.5 bg-orange-600 text-white text-xs font-medium rounded-lg hover:bg-orange-700 transition-all duration-200 active:scale-95 shadow-sm hover:shadow"
                                   title="Opt-out"
                                 >
-                                  Block
+                                  Opt-out
                                 </button>
-                              )}
-                              <button
-                                onClick={() => openEditModal(contact)}
-                                className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
-                                title="Edit"
-                              >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                </svg>
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setSelectedContact(contact);
-                                  setShowDeleteModal(true);
-                                }}
-                                className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
-                                title="Delete"
-                              >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                              );
+                            })()}
+                            <button
+                              type="button"
+                              onClick={() => openEditModal(contact)}
+                              className="p-2 text-gray-600 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-all duration-200 active:scale-95"
+                              title="Edit"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedContact(contact);
+                                setShowDeleteModal(true);
+                              }}
+                              className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all duration-200 active:scale-95"
+                              title="Delete"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
                 </div>
 
-                {/* Pagination */}
                 {pagination.pages > 1 && (
-                  <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
+                  <div className="mt-6 md:mt-8 rounded-2xl border border-gray-100/90 bg-white/90 backdrop-blur-sm px-4 py-4 md:px-6 shadow-md shadow-gray-200/30 ring-1 ring-gray-100/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                     <div className="text-sm text-gray-700">
                       Showing {((pagination.page - 1) * pagination.limit) + 1} to {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} contacts
                     </div>
                     <div className="flex gap-2">
                       <button
+                        type="button"
                         onClick={() => handlePageChange(filters.page - 1)}
                         disabled={filters.page === 1}
-                        className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="px-4 py-2 border-2 border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-white hover:border-sky-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 active:scale-[0.98]"
                       >
                         Previous
                       </button>
                       <button
+                        type="button"
                         onClick={() => handlePageChange(filters.page + 1)}
                         disabled={filters.page >= pagination.pages}
-                        className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="px-4 py-2 border-2 border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-white hover:border-sky-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 active:scale-[0.98]"
                       >
                         Next
                       </button>
@@ -710,86 +773,32 @@ function Contacts() {
               </>
             )}
           </div>
+          </div>
+          </div>
         </main>
       </div>
 
       {/* Create Contact Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b border-gray-200">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xl font-bold text-gray-800">Add New Contact</h3>
-                <button
-                  onClick={() => {
-                    setShowCreateModal(false);
-                    setFormData({ phone: '', name: '', email: '', tags: '', country: '' });
-                    setError('');
-                  }}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <form onSubmit={handleCreateContact} className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number *</label>
-                <input
-                  type="text"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  required
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                  placeholder="e.g., 919999999999"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Name *</label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  required
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                  placeholder="Enter contact name"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                  placeholder="Enter email address"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Tags</label>
-                  <input
-                    type="text"
-                    value={formData.tags}
-                    onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                    placeholder="e.g., customer, vip (comma separated)"
-                  />
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="motion-pop w-full max-w-lg max-h-[92vh] overflow-hidden rounded-2xl shadow-2xl shadow-sky-900/20 border border-white/20 ring-1 ring-black/5 flex flex-col bg-white">
+            <div className="relative shrink-0 overflow-hidden bg-gradient-to-br from-sky-600 via-sky-500 to-blue-700 text-white px-6 pt-7 pb-8 md:px-8 md:pt-8 md:pb-10">
+              <div className="pointer-events-none absolute -right-16 -top-12 h-40 w-40 rounded-full bg-white/10 blur-2xl" aria-hidden />
+              <div className="pointer-events-none absolute -bottom-20 -left-10 h-36 w-36 rounded-full bg-blue-900/30 blur-2xl" aria-hidden />
+              <div className="relative flex items-start justify-between gap-4">
+                <div className="flex items-start gap-4 min-w-0">
+                  <div className="shrink-0 w-14 h-14 rounded-2xl bg-white/15 backdrop-blur-sm border border-white/25 flex items-center justify-center shadow-lg">
+                    <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                    </svg>
+                  </div>
+                  <div className="min-w-0 pt-0.5">
+                    <h3 className="text-xl md:text-2xl font-bold tracking-tight">Add new contact</h3>
+                    <p className="mt-1 text-sm text-sky-100/95 leading-snug">
+                      Save a WhatsApp number and details for campaigns and inbox.
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Country</label>
-                  <input
-                    type="text"
-                    value={formData.country}
-                    onChange={(e) => setFormData({ ...formData, country: e.target.value })}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                    placeholder="Enter country"
-                  />
-                </div>
-              </div>
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
                 <button
                   type="button"
                   onClick={() => {
@@ -797,16 +806,137 @@ function Contacts() {
                     setFormData({ phone: '', name: '', email: '', tags: '', country: '' });
                     setError('');
                   }}
-                  className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50 transition"
+                  className="shrink-0 rounded-xl p-2 text-white/90 hover:text-white hover:bg-white/15 transition-all duration-200 active:scale-95"
+                  aria-label="Close"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <form onSubmit={handleCreateContact} className="flex flex-col flex-1 min-h-0 overflow-y-auto bg-gradient-to-b from-gray-50/80 via-white to-sky-50/25">
+              <div className="p-5 md:p-6 space-y-5">
+                <div className="rounded-2xl border-2 border-sky-100/90 bg-white p-4 md:p-5 shadow-sm ring-1 ring-sky-50/80 space-y-4">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-sky-600/90">Required</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="sm:col-span-1">
+                      <label className="flex items-center gap-2 text-sm font-semibold text-gray-800 mb-2">
+                        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-100 text-sky-700">
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                          </svg>
+                        </span>
+                        Phone number *
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.phone}
+                        onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                        required
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl bg-gray-50/80 hover:bg-white focus:ring-2 focus:ring-sky-400/50 focus:border-sky-500 outline-none transition-all text-sm shadow-inner shadow-gray-100/50"
+                        placeholder="e.g., 919999999999"
+                      />
+                    </div>
+                    <div className="sm:col-span-1">
+                      <label className="flex items-center gap-2 text-sm font-semibold text-gray-800 mb-2">
+                        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-100 text-sky-700">
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                          </svg>
+                        </span>
+                        Name *
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.name}
+                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                        required
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl bg-gray-50/80 hover:bg-white focus:ring-2 focus:ring-sky-400/50 focus:border-sky-500 outline-none transition-all text-sm shadow-inner shadow-gray-100/50"
+                        placeholder="Enter contact name"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-gray-200/90 bg-white p-4 md:p-5 shadow-sm ring-1 ring-gray-100/70 space-y-4">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Optional</p>
+                  <div>
+                    <label className="flex items-center gap-2 text-sm font-semibold text-gray-800 mb-2">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-100 text-gray-600">
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                      </span>
+                      Email
+                    </label>
+                    <input
+                      type="email"
+                      value={formData.email}
+                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl bg-gray-50/80 hover:bg-white focus:ring-2 focus:ring-sky-400/50 focus:border-sky-500 outline-none transition-all text-sm"
+                      placeholder="Enter email address"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-800 mb-2">Tags</label>
+                      <input
+                        type="text"
+                        value={formData.tags}
+                        onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl bg-gray-50/80 hover:bg-white focus:ring-2 focus:ring-sky-400/50 focus:border-sky-500 outline-none transition-all text-sm"
+                        placeholder="e.g., customer, vip (comma separated)"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-800 mb-2">Country</label>
+                      <input
+                        type="text"
+                        value={formData.country}
+                        onChange={(e) => setFormData({ ...formData, country: e.target.value })}
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl bg-gray-50/80 hover:bg-white focus:ring-2 focus:ring-sky-400/50 focus:border-sky-500 outline-none transition-all text-sm"
+                        placeholder="Enter country"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-auto sticky bottom-0 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-3 px-5 py-4 md:px-6 md:py-5 border-t border-gray-200/80 bg-white/95 backdrop-blur-md">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateModal(false);
+                    setFormData({ phone: '', name: '', email: '', tags: '', country: '' });
+                    setError('');
+                  }}
+                  className="w-full sm:w-auto px-6 py-3 border-2 border-gray-200 rounded-xl text-gray-700 font-semibold hover:bg-gray-50 transition-all duration-200 active:scale-[0.98]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={saving}
-                  className="px-6 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="group relative w-full sm:w-auto overflow-hidden px-6 py-3 rounded-xl font-semibold text-white shadow-lg shadow-sky-600/35 transition-all duration-300 hover:shadow-xl hover:shadow-sky-500/40 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 bg-gradient-to-r from-sky-600 via-sky-500 to-blue-600"
                 >
-                  {saving ? 'Creating...' : 'Create Contact'}
+                  <span className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" aria-hidden />
+                  <span className="relative flex items-center justify-center gap-2">
+                    {saving ? (
+                      <>
+                        <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        Create Contact
+                      </>
+                    )}
+                  </span>
                 </button>
               </div>
             </form>
@@ -816,78 +946,11 @@ function Contacts() {
 
       {/* Edit Contact Modal */}
       {showEditModal && selectedContact && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b border-gray-200">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xl font-bold text-gray-800">Edit Contact</h3>
-                <button
-                  onClick={() => {
-                    setShowEditModal(false);
-                    setSelectedContact(null);
-                    setFormData({ phone: '', name: '', email: '', tags: '', country: '' });
-                    setError('');
-                  }}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <form onSubmit={handleEditContact} className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number</label>
-                <input
-                  type="text"
-                  value={formData.phone}
-                  disabled
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed"
-                />
-                <p className="text-xs text-gray-500 mt-1">Phone number cannot be changed</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Name *</label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  required
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Tags</label>
-                  <input
-                    type="text"
-                    value={formData.tags}
-                    onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                    placeholder="e.g., customer, vip (comma separated)"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Country</label>
-                  <input
-                    type="text"
-                    value={formData.country}
-                    onChange={(e) => setFormData({ ...formData, country: e.target.value })}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                  />
-                </div>
-              </div>
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="motion-pop bg-white rounded-2xl shadow-2xl shadow-gray-900/15 border border-gray-100/90 max-w-2xl w-full max-h-[90vh] overflow-y-auto ring-1 ring-black/5">
+            <div className="p-5 md:p-6 border-b border-gray-100 bg-gradient-to-r from-slate-50 via-sky-50/50 to-sky-50/30">
+              <div className="flex items-start justify-between gap-4">
+                <h3 className="text-xl md:text-2xl font-bold text-gray-900 tracking-tight">Edit Contact</h3>
                 <button
                   type="button"
                   onClick={() => {
@@ -896,14 +959,85 @@ function Contacts() {
                     setFormData({ phone: '', name: '', email: '', tags: '', country: '' });
                     setError('');
                   }}
-                  className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50 transition"
+                  className="shrink-0 text-gray-400 hover:text-gray-700 rounded-xl p-2 transition-all duration-200 hover:bg-white/90 active:scale-95 ring-1 ring-transparent hover:ring-gray-200/80"
+                  aria-label="Close"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <form onSubmit={handleEditContact} className="p-5 md:p-6 space-y-5 bg-gradient-to-b from-white to-sky-50/20">
+              <div className="rounded-2xl border border-gray-100/90 bg-white p-4 md:p-5 shadow-sm ring-1 ring-gray-100/70 space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-800 mb-2">Phone Number</label>
+                  <input
+                    type="text"
+                    value={formData.phone}
+                    disabled
+                    className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl bg-gray-100/80 text-gray-500 cursor-not-allowed text-sm"
+                  />
+                  <p className="text-xs text-gray-500 mt-1.5">Phone number cannot be changed</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-800 mb-2">Name *</label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    required
+                    className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl bg-gray-50/70 hover:bg-white focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none transition-all shadow-sm text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-800 mb-2">Email</label>
+                  <input
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl bg-gray-50/70 hover:bg-white focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none transition-all shadow-sm text-sm"
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-800 mb-2">Tags</label>
+                    <input
+                      type="text"
+                      value={formData.tags}
+                      onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
+                      className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl bg-gray-50/70 hover:bg-white focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none transition-all shadow-sm text-sm"
+                      placeholder="e.g., customer, vip (comma separated)"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-800 mb-2">Country</label>
+                    <input
+                      type="text"
+                      value={formData.country}
+                      onChange={(e) => setFormData({ ...formData, country: e.target.value })}
+                      className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl bg-gray-50/70 hover:bg-white focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 outline-none transition-all shadow-sm text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEditModal(false);
+                    setSelectedContact(null);
+                    setFormData({ phone: '', name: '', email: '', tags: '', country: '' });
+                    setError('');
+                  }}
+                  className="px-6 py-2.5 border-2 border-gray-200 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition-all duration-200 active:scale-[0.98]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={saving}
-                  className="px-6 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-6 py-2.5 bg-sky-600 text-white rounded-xl font-semibold hover:bg-sky-700 shadow-md shadow-sky-600/25 transition-all duration-200 hover:shadow-lg active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
                 >
                   {saving ? 'Updating...' : 'Update Contact'}
                 </button>
@@ -915,26 +1049,30 @@ function Contacts() {
 
       {/* Delete Confirmation Modal */}
       {showDeleteModal && selectedContact && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
-            <div className="p-6">
-              <h3 className="text-xl font-bold text-gray-800 mb-2">Delete Contact</h3>
-              <p className="text-gray-600 mb-6">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="motion-pop bg-white rounded-2xl shadow-2xl shadow-gray-900/15 border border-gray-100/90 max-w-md w-full ring-1 ring-black/5 overflow-hidden">
+            <div className="p-5 md:p-6 border-b border-gray-100 bg-gradient-to-r from-slate-50 via-red-50/40 to-rose-50/30">
+              <h3 className="text-xl md:text-2xl font-bold text-gray-900 tracking-tight">Delete Contact</h3>
+            </div>
+            <div className="p-5 md:p-6 bg-gradient-to-b from-white to-sky-50/15">
+              <p className="text-gray-600 mb-6 text-sm md:text-base leading-relaxed">
                 Are you sure you want to delete "{selectedContact.name || selectedContact.phone}"? This action cannot be undone.
               </p>
-              <div className="flex items-center justify-end gap-3">
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100">
                 <button
+                  type="button"
                   onClick={() => {
                     setShowDeleteModal(false);
                     setSelectedContact(null);
                   }}
-                  className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50 transition"
+                  className="px-6 py-2.5 border-2 border-gray-200 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition-all duration-200 active:scale-[0.98]"
                 >
                   Cancel
                 </button>
                 <button
+                  type="button"
                   onClick={handleDeleteContact}
-                  className="px-6 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition"
+                  className="px-6 py-2.5 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 shadow-md shadow-red-600/25 transition-all duration-200 hover:shadow-lg active:scale-[0.98]"
                 >
                   Delete
                 </button>
@@ -946,26 +1084,30 @@ function Contacts() {
 
       {/* Opt-out Confirmation Modal */}
       {showOptOutModal && selectedContact && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
-            <div className="p-6">
-              <h3 className="text-xl font-bold text-gray-800 mb-2">Opt-out Contact</h3>
-              <p className="text-gray-600 mb-6">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="motion-pop bg-white rounded-2xl shadow-2xl shadow-gray-900/15 border border-gray-100/90 max-w-md w-full ring-1 ring-black/5 overflow-hidden">
+            <div className="p-5 md:p-6 border-b border-gray-100 bg-gradient-to-r from-slate-50 via-amber-50/50 to-orange-50/35">
+              <h3 className="text-xl md:text-2xl font-bold text-gray-900 tracking-tight">Opt-out Contact</h3>
+            </div>
+            <div className="p-5 md:p-6 bg-gradient-to-b from-white to-amber-50/15">
+              <p className="text-gray-600 mb-6 text-sm md:text-base leading-relaxed">
                 Are you sure you want to opt-out/block "{selectedContact.name || selectedContact.phone}"? They will no longer receive messages from you.
               </p>
-              <div className="flex items-center justify-end gap-3">
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100">
                 <button
+                  type="button"
                   onClick={() => {
                     setShowOptOutModal(false);
                     setSelectedContact(null);
                   }}
-                  className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50 transition"
+                  className="px-6 py-2.5 border-2 border-gray-200 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition-all duration-200 active:scale-[0.98]"
                 >
                   Cancel
                 </button>
                 <button
+                  type="button"
                   onClick={handleOptOutContact}
-                  className="px-6 py-2 bg-orange-600 text-white rounded-lg font-medium hover:bg-orange-700 transition"
+                  className="px-6 py-2.5 bg-orange-600 text-white rounded-xl font-semibold hover:bg-orange-700 shadow-md shadow-orange-600/25 transition-all duration-200 hover:shadow-lg active:scale-[0.98]"
                 >
                   Opt-out
                 </button>

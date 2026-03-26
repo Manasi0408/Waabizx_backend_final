@@ -342,12 +342,53 @@ exports.optOutContact = async (req, res) => {
 
     // Update status to 'unsubscribed' (opt-out/block)
     await contact.update({
-      status: 'unsubscribed'
+      status: 'unsubscribed',
+      // Clear keyword opt-in timestamp so contact is treated as "not opted-in"
+      whatsappOptInAt: null
     });
 
     res.json({
       success: true,
       message: 'Contact opted out successfully',
+      contact
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+exports.optInContact = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const contactId = req.params.id;
+
+    const contact = await Contact.findOne({
+      where: {
+        id: contactId,
+        userId
+      }
+    });
+
+    if (!contact) {
+      return res.status(404).json({
+        success: false,
+        message: 'Contact not found'
+      });
+    }
+
+    // Mark as opted-in (consent timestamp + active status)
+    await contact.update({
+      status: 'active',
+      whatsappOptInAt: contact.whatsappOptInAt || new Date()
+    });
+
+    res.json({
+      success: true,
+      message: 'Contact opted in successfully',
       contact
     });
   } catch (error) {

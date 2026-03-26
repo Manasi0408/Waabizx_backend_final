@@ -373,94 +373,96 @@ function Chatbot() {
   }
 
   return (
-    <div className="fixed bottom-4 right-4 z-50">
-      {/* Chat Button */}
+    <div className="fixed bottom-4 right-4 z-[100]">
+      {/* Chat Button — matches dashboard CTA / logo blues */}
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
-          className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white rounded-full p-3.5 shadow-2xl transition-all duration-300 hover:scale-110 flex items-center justify-center relative group"
+          className="relative flex items-center justify-center rounded-full bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 p-3.5 text-white shadow-xl shadow-sky-600/40 ring-2 ring-white/30 transition-all duration-300 hover:scale-110 hover:shadow-2xl hover:shadow-sky-500/35 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2"
           aria-label="Open chatbot"
         >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="relative z-[1] h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
           </svg>
-          {/* Pulse animation */}
-          <span className="absolute inset-0 rounded-full bg-blue-600 animate-ping opacity-20"></span>
+          <span className="absolute inset-0 rounded-full bg-sky-400/30 animate-ping opacity-40" aria-hidden />
         </button>
       )}
 
       {/* Chat Window */}
       {isOpen && (
-        <div className="bg-white rounded-2xl shadow-2xl w-[calc(100vw-2rem)] sm:w-96 h-[600px] max-h-[calc(100vh-2rem)] flex flex-col border border-gray-100 overflow-hidden animate-fade-in-up">
-          {/* Header */}
-          <div className="bg-gradient-to-r from-blue-600 via-blue-600 to-blue-700 text-white p-5 rounded-t-2xl flex items-center justify-between shadow-lg">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 bg-white bg-opacity-25 rounded-full flex items-center justify-center shadow-md backdrop-blur-sm">
-                <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="flex h-[600px] max-h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] animate-fade-in-up flex-col overflow-hidden rounded-2xl border border-gray-200/90 bg-white shadow-2xl shadow-sky-900/15 ring-1 ring-gray-100/90 sm:w-96">
+          {/* Header — aligned with app top bars (sky → blue) */}
+          <div className="relative flex items-center justify-between rounded-t-2xl bg-gradient-to-r from-sky-600 via-sky-600 to-blue-700 px-4 py-4 text-white shadow-md shadow-sky-900/20 sm:px-5 sm:py-5">
+            <span className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/25" aria-hidden />
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/15 shadow-inner ring-1 ring-white/30 backdrop-blur-sm sm:h-12 sm:w-12">
+                <svg className="h-6 w-6 sm:h-7 sm:w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                 </svg>
               </div>
-              <div>
-                <h3 className="font-bold text-base">AiSensy Support</h3>
-                <p className="text-xs text-blue-100 font-medium">We're here to help ✨</p>
+              <div className="min-w-0">
+                <h3 className="truncate text-[15px] font-bold tracking-tight sm:text-base">AiSensy Support</h3>
+                <p className="text-xs font-medium text-sky-100/95">We&apos;re here to help ✨</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
               {!flowState && (
                 <button
+                  type="button"
                   onClick={handleStartBot}
                   disabled={isTyping || isLocked}
-                  className="bg-white bg-opacity-20 hover:bg-opacity-30 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="rounded-lg border border-white/40 bg-white/10 px-2.5 py-1.5 text-[11px] font-semibold text-white backdrop-blur-sm transition-all hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-45 sm:px-3 sm:text-xs"
                   title="Start Bot"
                 >
                   Start Bot
                 </button>
               )}
               <button
+                type="button"
                 onClick={() => setIsOpen(false)}
-                className="text-white hover:text-gray-200 transition-all duration-200 p-2 rounded-full hover:bg-white hover:bg-opacity-20 active:scale-95"
+                className="rounded-full p-2 text-white/95 transition-all hover:bg-white/15 active:scale-95"
                 aria-label="Close chatbot"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
           </div>
 
-          {/* Messages Area */}
-          <div className="flex-1 overflow-y-auto p-5 bg-gradient-to-b from-gray-50 to-white">
+          {/* Messages — same soft page background as main content */}
+          <div className="flex-1 overflow-y-auto bg-gradient-to-b from-sky-50/60 via-white to-gray-50/80 p-4 sm:p-5">
             <div className="space-y-4">
               {messages.map((message) => (
                 <div key={message.id} className="animate-fade-in">
-                  <div
-                    className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'} mb-2`}
-                  >
+                  <div className={`mb-2 flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div
-                      className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-md transition-all duration-200 ${
+                      className={`max-w-[88%] rounded-2xl px-4 py-3 shadow-sm transition-all duration-200 sm:max-w-[85%] ${
                         message.sender === 'user'
-                          ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-br-sm'
-                          : 'bg-white text-gray-800 rounded-bl-sm shadow-sm border border-gray-100'
+                          ? 'rounded-br-md bg-gradient-to-r from-sky-600 to-blue-700 text-white shadow-md shadow-sky-600/25 ring-1 ring-sky-500/30'
+                          : 'rounded-bl-md border border-gray-100/90 bg-white/95 text-gray-800 ring-1 ring-gray-100/80'
                       }`}
                     >
-                      <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{message.text}</p>
-                      <p className={`text-xs mt-2 ${
-                        message.sender === 'user' ? 'text-blue-100' : 'text-gray-400'
-                      }`}>
+                      <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{message.text}</p>
+                      <p
+                        className={`mt-2 text-[11px] tabular-nums ${
+                          message.sender === 'user' ? 'text-sky-100/90' : 'text-gray-400'
+                        }`}
+                      >
                         {formatTime(message.timestamp)}
                       </p>
                     </div>
                   </div>
-                  
-                  {/* Menu Buttons */}
+
                   {message.menuButtons && message.menuButtons.length > 0 && !isLocked && (
-                    <div className="mt-3 flex flex-wrap gap-2 justify-start animate-fade-in">
+                    <div className="mt-2 grid grid-cols-2 gap-2 animate-fade-in sm:gap-2.5">
                       {message.menuButtons.map((button) => (
                         <button
                           key={button.id}
+                          type="button"
                           onClick={() => handleMenuButtonClick(button.value)}
                           disabled={isTyping || isLocked}
-                          className="px-4 py-2.5 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 text-blue-700 text-xs font-semibold rounded-xl border border-blue-200 shadow-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-md hover:scale-105 active:scale-95"
+                          className="rounded-xl border-2 border-sky-100 bg-white px-3 py-2.5 text-left text-[11px] font-semibold leading-snug text-sky-800 shadow-sm ring-1 ring-gray-100/60 transition-all hover:border-sky-300 hover:bg-sky-50/80 hover:shadow-md active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:text-xs"
                         >
                           {button.text}
                         </button>
@@ -469,37 +471,37 @@ function Chatbot() {
                   )}
                 </div>
               ))}
-              
+
               {isTyping && (
                 <div className="flex justify-start animate-fade-in">
-                  <div className="bg-white text-gray-800 rounded-2xl rounded-bl-sm px-5 py-3 shadow-md border border-gray-100">
-                    <div className="flex gap-1.5 items-center">
-                      <span className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
-                      <span className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
-                      <span className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
+                  <div className="rounded-2xl rounded-bl-md border border-gray-100/90 bg-white/95 px-5 py-3 shadow-sm ring-1 ring-gray-100/80">
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-sky-500" style={{ animationDelay: '0ms' }} />
+                      <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-sky-500" style={{ animationDelay: '150ms' }} />
+                      <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-sky-500" style={{ animationDelay: '300ms' }} />
                     </div>
                   </div>
                 </div>
               )}
-              
+
               <div ref={messagesEndRef} />
             </div>
           </div>
 
-          {/* Input Area */}
-          <div className="border-t border-gray-100 p-4 bg-gradient-to-r from-white to-gray-50 rounded-b-2xl shadow-inner">
+          {/* Input — matches form controls across the app */}
+          <div className="rounded-b-2xl border-t border-gray-100/90 bg-gradient-to-r from-white via-sky-50/20 to-white p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] sm:p-4">
             {isLocked ? (
-              <div className="text-center py-3 px-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
-                <p className="text-sm text-blue-700 font-medium flex items-center justify-center gap-2">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="rounded-xl border border-sky-200/80 bg-gradient-to-r from-sky-50/90 to-blue-50/50 px-3 py-3 text-center ring-1 ring-sky-100/60 sm:px-4">
+                <p className="flex items-center justify-center gap-2 text-sm font-medium text-sky-900">
+                  <svg className="h-5 w-5 shrink-0 text-sky-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                   Conversation routed to Inbox. Check your Inbox for support.
                 </p>
               </div>
             ) : (
-              <form onSubmit={handleSendMessage} className="flex gap-3">
-                <div className="flex-1 relative">
+              <form onSubmit={handleSendMessage} className="flex gap-2 sm:gap-3">
+                <div className="relative min-w-0 flex-1">
                   <input
                     ref={inputRef}
                     type="text"
@@ -507,16 +509,16 @@ function Chatbot() {
                     onChange={(e) => setInputMessage(e.target.value)}
                     onKeyPress={handleKeyPress}
                     placeholder="Type your message..."
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm bg-white shadow-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full rounded-xl border-2 border-gray-200/90 bg-white px-3.5 py-2.5 text-sm shadow-sm outline-none transition-all placeholder:text-gray-400 focus:border-sky-400 focus:ring-4 focus:ring-sky-500/15 disabled:cursor-not-allowed disabled:opacity-50 sm:px-4 sm:py-3"
                     disabled={isTyping || isLocked}
                   />
                 </div>
                 <button
                   type="submit"
                   disabled={!inputMessage.trim() || isTyping || isLocked}
-                  className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-5 py-3 rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center shadow-lg hover:shadow-xl active:scale-95"
+                  className="flex shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 px-4 py-2.5 text-white shadow-lg shadow-sky-600/25 transition-all hover:from-sky-500 hover:to-blue-500 hover:shadow-xl active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none sm:px-5 sm:py-3"
                 >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                   </svg>
                 </button>

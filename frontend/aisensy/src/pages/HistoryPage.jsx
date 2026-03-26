@@ -1,40 +1,9 @@
-import React, { useMemo, useState, useEffect, useCallback } from "react";
-import { Link, useLocation } from "react-router-dom";
+import React, { useMemo, useState, useEffect, useCallback, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import axios from "../api/axios";
 import { getInboxList, getContactMessages } from "../services/inboxService";
-
-const iconClass = "w-5 h-5 flex-shrink-0";
-
-const navIcons = {
-  dashboard: (
-    <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-    </svg>
-  ),
-  liveChat: (
-    <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-    </svg>
-  ),
-  history: (
-    <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
-  ),
-  manage: (
-    <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-    </svg>
-  ),
-};
-
-const navItems = [
-  { to: "/agent-dashboard", label: "Dashboard", icon: navIcons.dashboard },
-  { to: "/live-chat", label: "Live Chat", icon: navIcons.liveChat },
-  { to: "/campaign-reports", label: "History", icon: navIcons.history },
-  { to: "/manage", label: "Manage", icon: navIcons.manage },
-];
+import AgentSidebar from "../components/AgentSidebar";
+import AgentTopbar from "../components/AgentTopbar";
 
 function formatMessageTime(dateStr) {
   if (!dateStr) return "";
@@ -61,16 +30,6 @@ function formatDateTime(dateStr) {
 
 function HistoryPage() {
   const location = useLocation();
-  const selectedProject = useMemo(() => {
-    const fromState = location?.state?.project;
-    if (fromState) return fromState;
-    try {
-      const raw = localStorage.getItem("selectedProject");
-      return raw ? JSON.parse(raw) : null;
-    } catch (e) {
-      return null;
-    }
-  }, [location?.state?.project]);
 
   const [inboxList, setInboxList] = useState([]);
   const [loadingInbox, setLoadingInbox] = useState(true);
@@ -85,6 +44,9 @@ function HistoryPage() {
   const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [agentsList, setAgentsList] = useState([]);
   const [selectedAgent, setSelectedAgentState] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const chatScrollRef = useRef(null);
+  const messagesEndRef = useRef(null);
 
   const setSelectedAgent = useCallback((agent) => {
     setSelectedAgentState(agent);
@@ -222,303 +184,347 @@ function HistoryPage() {
   }, [inboxList, selectedContact?.phone]);
 
   const computedOptedIn = useMemo(() => {
-    const raw = selectedContact?.whatsappOptInAt;
-    return !!raw;
-  }, [selectedContact?.whatsappOptInAt]);
+    return !!selectedContactFromList?.whatsappOptInAt;
+  }, [selectedContactFromList?.whatsappOptInAt]);
 
   useEffect(() => {
     // Keep the toggle reflecting contact's current opt-in value
     setOptedIn(computedOptedIn);
   }, [computedOptedIn]);
 
+  // Always scroll to the bottom when opening a chat (read-only history).
+  useEffect(() => {
+    if (!selectedContact?.phone) return;
+    if (loadingMessages) return;
+    if (!messagesEndRef.current) return;
+
+    // Use auto so it feels immediate when you switch chats.
+    messagesEndRef.current.scrollIntoView({ behavior: "auto", block: "end" });
+  }, [selectedContact?.phone, loadingMessages, messages.length]);
+
   const toggleSection = (key) => {
     setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      {/* Narrow left sidebar - icon-only nav (no search, no contact list) */}
-      <div className="w-16 bg-teal-900 text-white flex flex-col flex-shrink-0 items-center py-4">
-        <button className="p-2 rounded-lg hover:bg-teal-800 mb-4">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        </button>
-        <div className="w-8 h-8 rounded flex items-center justify-center bg-teal-700 mb-6">
-          <svg className="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M13 3L4 14h6l-2 7 9-11h-6l2-7z" />
-          </svg>
-        </div>
-        <nav className="flex-1 flex flex-col items-center gap-1 w-full px-2">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.to;
-            return (
-              <Link
-                key={item.to}
-                to={item.to}
-                state={selectedProject ? { project: selectedProject } : undefined}
-                className={`w-full flex flex-col items-center justify-center gap-1 py-3 px-2 rounded-lg transition-colors ${
-                  isActive ? "bg-teal-700 text-white" : "text-teal-100 hover:bg-teal-800 hover:text-white"
-                }`}
-                title={item.label}
-              >
-                {item.icon}
-                <span className="text-[10px] leading-tight text-center">{item.label}</span>
-              </Link>
-            );
-          })}
-        </nav>
-        <div className="mt-auto pt-4 border-t border-teal-800 w-full flex justify-center">
-          <div className="w-10 h-10 rounded-full bg-teal-700 flex items-center justify-center text-sm font-semibold cursor-pointer" title="Profile">
-            V
-          </div>
-        </div>
-      </div>
+    <div className="h-screen flex flex-row bg-gray-50 overflow-hidden">
+      <AgentSidebar open={sidebarOpen} />
 
-      {/* Main content: top bar + history list panel + center + right */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Top bar - agent name, project name, search in center, agent avatars, arrow (like LiveChatPage) */}
-        <div className="bg-teal-900 text-white flex items-center gap-4 px-4 py-3 flex-shrink-0">
-          <div className="flex flex-col flex-shrink-0 max-w-[240px] min-w-0">
-            <span className="text-xs font-semibold text-white truncate">
-              {selectedAgent?.name || selectedAgent?.email || currentUserName || currentUserEmail || "—"}
-            </span>
-            <span className="text-xs font-medium text-teal-100/90 truncate">
-              {selectedProject?.project_name ? selectedProject.project_name : "Project: —"}
-            </span>
-          </div>
-          <div className="flex-1 min-w-0 max-w-md mx-auto">
-            <div className="relative w-full">
-              <input
-                type="text"
-                placeholder="Search name or mobile number"
-                className="w-full bg-teal-800 border border-teal-700 rounded-lg pl-10 pr-16 py-2.5 text-sm text-white placeholder-teal-300 focus:outline-none focus:ring-1 focus:ring-teal-500"
-              />
-              <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        <AgentTopbar onMenuClick={() => setSidebarOpen((o) => !o)} />
+
+        <div className="shrink-0 z-10 border-b border-gray-200/80 bg-gradient-to-r from-white/95 via-sky-50/50 to-white/95 backdrop-blur-md px-3 md:px-5 py-2.5 md:py-3 shadow-sm shadow-gray-200/30">
+          <div className="flex flex-wrap items-center gap-3 max-w-[2000px] mx-auto">
+            <div className="hidden lg:flex items-center gap-2 shrink-0 text-xs font-semibold text-sky-800">
+              <svg className="w-4 h-4 text-sky-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <button className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded hover:bg-teal-700">
-                <svg className="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+              Campaign history
+            </div>
+            <div className="flex-1 min-w-[180px] max-w-xl mx-auto w-full">
+              <div className="relative w-full">
+                <input
+                  type="text"
+                  placeholder="Search name or mobile number"
+                  className="w-full bg-white/95 border-2 border-gray-200/90 rounded-xl pl-10 pr-12 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-400/40 focus:border-sky-500 transition"
+                />
+                <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-sky-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <button
+                  type="button"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg text-sky-600 hover:bg-sky-50 transition"
+                  aria-label="Filter"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 flex-shrink-0 max-w-full overflow-x-auto pb-0.5 md:pb-0 [scrollbar-width:thin]">
+              {agentsList.slice(0, 7).map((a) => {
+                const name = a?.name || a?.email || "";
+                const initial = name ? String(name).trim().slice(0, 2).toUpperCase() : "?";
+                const isAgentSelected =
+                  selectedAgent && (selectedAgent.id === a.id || (selectedAgent.email && selectedAgent.email === a.email));
+                return (
+                  <button
+                    key={a.id ?? a.email ?? initial}
+                    type="button"
+                    onClick={() => setSelectedAgent(a)}
+                    className={`w-9 h-9 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 border-2 transition-all duration-200 ${
+                      isAgentSelected
+                        ? "bg-gradient-to-br from-sky-500 to-blue-700 border-white text-white shadow-lg shadow-sky-500/40 ring-2 ring-sky-300/50 scale-105"
+                        : "bg-white border-gray-200 text-sky-800 hover:border-sky-300 hover:shadow-md"
+                    }`}
+                    title={name || "Agent"}
+                  >
+                    {initial}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                className="p-2 rounded-xl text-sky-600 hover:bg-sky-50 border border-transparent hover:border-sky-200 transition"
+                aria-label="More"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                 </svg>
               </button>
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {agentsList.slice(0, 7).map((a) => {
-              const name = a?.name || a?.email || "";
-              const initial = name ? String(name).trim().slice(0, 2).toUpperCase() : "?";
-              const isSelected = selectedAgent && (selectedAgent.id === a.id || (selectedAgent.email && selectedAgent.email === a.email));
-              return (
-                <button
-                  key={a.id ?? a.email ?? initial}
-                  type="button"
-                  onClick={() => setSelectedAgent(a)}
-                  className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0 border-2 transition-colors ${
-                    isSelected ? "bg-teal-600 border-white ring-2 ring-white" : "bg-teal-700 border-teal-900 text-teal-100 hover:bg-teal-600"
-                  }`}
-                  title={name || "Agent"}
-                >
-                  {initial}
-                </button>
-              );
-            })}
-            <button className="p-2 rounded-full hover:bg-teal-800" type="button">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-              </svg>
-            </button>
-          </div>
         </div>
 
-        <div className="flex-1 flex min-h-0">
-          {/* History contact list - same as admin Inbox */}
-          <div className="w-80 bg-gray-100 border-r border-gray-200 flex flex-col flex-shrink-0">
-            <div className="flex-1 overflow-y-auto bg-white min-h-0">
-              {loadingInbox ? (
-                <div className="p-4 text-center text-sm text-gray-500">Loading...</div>
-              ) : inboxList.length === 0 ? (
-                <div className="p-4 text-center text-sm text-gray-500">No conversations</div>
-              ) : (
-                inboxList.map((item) => {
-                  const id = item.contactId || item.phone;
-                  const isSelected = selectedContact && (selectedContact.phone === item.phone || selectedContact.contactId === item.contactId);
-                  return (
-                    <button
-                      key={id || item.phone}
-                      type="button"
-                      onClick={() => setSelectedContact({
-                        id: item.contactId || item.phone,
-                        contactId: item.contactId,
-                        phone: item.phone,
-                        name: item.name || item.phone,
-                        lastMessage: item.lastMessage,
-                      })}
-                      className={`w-full flex items-center gap-3 p-3 text-left border-b border-gray-100 hover:bg-gray-50 ${
-                        isSelected ? "bg-teal-50 border-l-4 border-l-teal-600" : ""
-                      }`}
-                    >
-                      <div className="w-10 h-10 rounded-full bg-teal-100 text-teal-800 flex items-center justify-center text-sm font-semibold flex-shrink-0">
-                        {getInitial(item.name || item.phone)}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="font-semibold text-gray-900 truncate text-sm">{item.name || item.phone}</p>
-                        <p className="text-xs text-gray-500 truncate">{item.lastMessage || "—"}</p>
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-            <div className="p-3 text-center text-xs text-gray-500 border-t border-gray-200 bg-gray-50 flex-shrink-0">
-              {inboxList.length} conversation{inboxList.length !== 1 ? "s" : ""}
-            </div>
+        <div className="flex-1 flex min-h-0 relative overflow-hidden bg-gradient-to-b from-sky-50/80 via-white to-sky-100/40">
+          <div className="pointer-events-none absolute inset-0 overflow-hidden z-0" aria-hidden>
+            <div className="absolute -top-24 right-1/4 w-72 h-72 bg-sky-400/25 motion-page-blob" />
+            <div className="absolute bottom-0 left-1/4 w-64 h-64 bg-blue-400/20 motion-page-blob motion-page-blob--b" />
           </div>
 
-          {/* Chat header + messages - same data as admin Inbox */}
-          <div className="flex-1 flex flex-col min-w-0">
-            <div className="bg-teal-800 text-white flex items-center justify-between px-4 py-3 flex-shrink-0">
-              <div className="flex items-center gap-3">
-                <span className="font-semibold">
-                  {selectedContact ? `${selectedContact.name || selectedContact.phone} (${selectedContact.phone})` : "Select a conversation"}
-                </span>
+          <div className="relative z-[1] flex flex-1 min-h-0 min-w-0">
+            <div className="w-80 flex flex-col flex-shrink-0 min-h-0 bg-white/90 backdrop-blur-sm border-r border-gray-200/80 shadow-sm shadow-gray-200/20">
+              <div className="px-3 py-2 border-b border-gray-200/80 bg-gradient-to-r from-slate-50/90 to-sky-50/40 flex-shrink-0">
+                <p className="text-xs font-bold text-sky-800 uppercase tracking-wide">Conversations</p>
+                <p className="text-[11px] text-gray-500">Message history</p>
               </div>
-              <span className="text-sm font-medium">Chat Profile</span>
+              <div className="flex-1 overflow-y-auto min-h-0 bg-white/50">
+                {loadingInbox ? (
+                  <div className="p-8 flex flex-col items-center justify-center gap-3 text-gray-500 text-sm motion-enter">
+                    <div className="h-8 w-8 rounded-full border-2 border-sky-200 border-t-sky-600 animate-spin" />
+                    Loading…
+                  </div>
+                ) : inboxList.length === 0 ? (
+                  <div className="p-8 text-center text-gray-500 text-sm motion-enter">
+                    <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-600">
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    No conversations
+                  </div>
+                ) : (
+                  inboxList.map((item) => {
+                    const id = item.contactId || item.phone;
+                    const isConvSelected =
+                      selectedContact && (selectedContact.phone === item.phone || selectedContact.contactId === item.contactId);
+                    return (
+                      <button
+                        key={id || item.phone}
+                        type="button"
+                        onClick={() =>
+                          setSelectedContact({
+                            id: item.contactId || item.phone,
+                            contactId: item.contactId,
+                            phone: item.phone,
+                            name: item.name || item.phone,
+                            lastMessage: item.lastMessage,
+                          })
+                        }
+                        className={`w-full flex items-center gap-3 p-3 text-left border-b border-gray-100/90 transition-all duration-200 motion-card-rich ${
+                          isConvSelected
+                            ? "bg-gradient-to-r from-sky-50 to-white border-l-4 border-l-sky-600 shadow-inner"
+                            : "hover:bg-sky-50/60"
+                        }`}
+                      >
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-sky-100 to-sky-200 text-sky-800 flex items-center justify-center text-sm font-bold flex-shrink-0 ring-2 ring-white shadow-sm">
+                          {getInitial(item.name || item.phone)}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold text-gray-900 truncate text-sm">{item.name || item.phone}</p>
+                          <p className="text-xs text-gray-500 truncate">{item.lastMessage || "—"}</p>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+              <div className="p-3 text-center text-xs font-medium text-sky-800/80 border-t border-gray-200/80 bg-gradient-to-r from-sky-50/50 to-white/80 flex-shrink-0">
+                {inboxList.length} conversation{inboxList.length !== 1 ? "s" : ""}
+              </div>
             </div>
 
-            <div className="flex-1 flex min-h-0">
-              <div className="flex-1 flex flex-col min-w-0 bg-[#e5ddd5] relative overflow-hidden">
-                <div className="absolute inset-0 opacity-30 pointer-events-none" style={{
-                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60' viewBox='0 0 60 60'%3E%3Cg fill='%23999' fill-opacity='0.15'%3E%3Cpath d='M30 5L5 20v20l25 15 25-15V20L30 5z'/%3E%3C/g%3E%3C/svg%3E")`,
-                  backgroundSize: "60px 60px",
-                }} />
-                <div className="flex-1 overflow-y-auto p-4 relative z-10">
-                  {!selectedContact ? (
-                    <div className="flex items-center justify-center h-full text-gray-500 text-sm">Select a conversation to view messages</div>
-                  ) : loadingMessages ? (
-                    <div className="flex items-center justify-center h-full text-gray-500 text-sm">Loading messages...</div>
-                  ) : messages.length === 0 ? (
-                    <div className="flex items-center justify-center h-full text-gray-500 text-sm">No messages yet</div>
-                  ) : (
-                    messages.map((msg) => {
-                      const isOutgoing = msg.type === "outgoing";
-                      const content = msg.content || msg.message || "";
-                      const sentAt = msg.sentAt || msg.createdAt || msg.timestamp;
-                      return (
-                        <div
-                          key={msg.id || `${sentAt}-${content.slice(0, 20)}`}
-                          className={`flex ${isOutgoing ? "justify-end" : "justify-start"} mb-3`}
-                        >
-                          <div className={`flex items-end gap-2 max-w-[75%] ${isOutgoing ? "flex-row-reverse" : ""}`}>
-                            {!isOutgoing && (
-                              <div className="w-8 h-8 rounded-full bg-teal-600 text-white flex items-center justify-center text-xs font-semibold flex-shrink-0">
-                                {getInitial(selectedContact.name || selectedContact.phone)}
-                              </div>
-                            )}
-                            <div
-                              className={`rounded-2xl px-4 py-2 ${
-                                isOutgoing
-                                  ? "bg-teal-600 text-white rounded-bl-md"
-                                  : "bg-white text-gray-800 rounded-br-md shadow-sm"
-                              }`}
-                            >
-                              <p className="text-sm whitespace-pre-wrap break-words">{content}</p>
-                              {sentAt && (
-                                <p className={`text-xs mt-1 ${isOutgoing ? "text-teal-100" : "text-gray-500"}`}>
-                                  {formatMessageTime(sentAt)}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })
+            <div className="flex-1 flex flex-col min-w-0 min-h-0">
+              <div className="shrink-0 z-10 border-b border-gray-200/80 bg-white/90 backdrop-blur-md px-4 py-3 flex items-center justify-between gap-3 shadow-sm">
+                <div className="min-w-0 flex-1">
+                  <span className="font-bold text-gray-900 truncate block">
+                    {selectedContact
+                      ? `${selectedContact.name || selectedContact.phone} (${selectedContact.phone})`
+                      : "Select a conversation"}
+                  </span>
+                  {selectedContact && (
+                    <span className="text-xs text-sky-700/80 font-medium">Read-only history</span>
                   )}
                 </div>
+                <span className="text-[10px] font-bold text-sky-600 uppercase tracking-wider shrink-0 hidden sm:inline">
+                  Profile →
+                </span>
               </div>
 
-              {/* Right panel - Chat Profile */}
-              <div className="w-80 bg-white border-l border-gray-200 flex flex-col overflow-y-auto flex-shrink-0">
-                <div className="p-4 border-b border-gray-200">
-                  <h3 className="font-semibold text-gray-800">Chat Profile</h3>
-                </div>
-                {selectedContact ? (
-                  <>
-                    <div className="p-4 flex flex-col items-center">
-                      <div className="w-20 h-20 rounded-full bg-teal-100 text-teal-800 flex items-center justify-center text-2xl font-bold mb-2">
-                        {getInitial(selectedContact.name || selectedContact.phone)}
-                      </div>
-                      <p className="font-semibold text-gray-900">{selectedContact.name || selectedContact.phone}</p>
-                      <p className="text-teal-600 font-semibold text-sm">{selectedContact.phone}</p>
-                    </div>
-                <div className="px-4 pb-4 space-y-2 text-sm">
-                  {[
-                    { label: "Status", value: selectedContact?.status || "—" },
-                    { label: "Email", value: selectedContact?.email || "—" },
-                    { label: "Last message", value: selectedContactFromList?.lastMessage || "—" },
-                    { label: "Last message time", value: formatDateTime(selectedContactFromList?.lastMessageTime) },
-                    { label: "Unread", value: String(selectedContactFromList?.unreadCount ?? "—") },
-                    { label: "First message", value: messages.length ? (messages[0]?.content || messages[0]?.message || "—") : "—" },
-                    {
-                      label: "First message time",
-                      value: messages.length
-                        ? formatDateTime(messages[0]?.sentAt || messages[0]?.createdAt || messages[0]?.timestamp)
-                        : "—",
-                    },
-                    {
-                      label: "Last active",
-                      value: messages.length
-                        ? formatDateTime(
-                            messages[messages.length - 1]?.sentAt ||
-                              messages[messages.length - 1]?.createdAt ||
-                              messages[messages.length - 1]?.timestamp
-                          )
-                        : formatDateTime(selectedContactFromList?.lastMessageTime),
-                    },
-                  ].map((row, i) => (
-                    <div key={i} className="flex justify-between py-1.5 border-b border-gray-100 gap-3">
-                      <span className="text-gray-500 shrink-0">{row.label}</span>
-                      <span className="text-gray-800 font-medium text-right min-w-0 truncate">{row.value}</span>
-                    </div>
-                  ))}
-                <div className="flex justify-between items-center py-1.5 border-b border-gray-100">
-                  <span className="text-gray-500">Opted In</span>
-                  <button
-                    role="switch"
-                    aria-checked={optedIn}
-                    onClick={() => setOptedIn(!optedIn)}
-                    className={`relative w-10 h-6 rounded-full transition-colors ${optedIn ? "bg-teal-500" : "bg-gray-300"}`}
-                  >
-                    <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${optedIn ? "left-5" : "left-1"}`} />
-                  </button>
-                </div>
-                </div>
-                {["Payments", "Campaigns", "Attributes", "Tags"].map((title) => {
-                  const key = title.toLowerCase();
-                  const isOpen = openSections[key];
-                  return (
-                    <div key={title} className="border-t border-gray-200">
-                      <button
-                        onClick={() => toggleSection(key)}
-                        className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-medium text-gray-800 hover:bg-gray-50"
-                      >
-                        {title}
-                        <svg className={`w-5 h-5 text-gray-500 transition-transform ${isOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                      {isOpen && (
-                        <div className="px-4 pb-3 text-sm text-gray-500">
-                          No {title.toLowerCase()} data.
+              <div className="flex-1 flex min-h-0">
+                <div className="flex-1 flex flex-col min-w-0 min-h-0 relative bg-white/40 backdrop-blur-[2px] border-x border-gray-200/60">
+                  <div
+                    className="absolute inset-0 opacity-[0.04] pointer-events-none bg-[url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%230ea5e9%22%3E%3Cpath d=%22M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z%22/%3E%3C/svg%3E')] bg-repeat bg-center"
+                    style={{ backgroundSize: "100px" }}
+                  />
+                  <div ref={chatScrollRef} className="flex-1 overflow-y-auto min-h-0 p-4 relative z-10">
+                    {!selectedContact ? (
+                      <div className="flex flex-col items-center justify-center h-full min-h-[200px] text-gray-500 motion-enter px-4">
+                        <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-100 to-sky-200 text-sky-600 shadow-inner ring-2 ring-white">
+                          <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
                         </div>
-                      )}
+                        <p className="text-sm font-medium text-gray-600">Select a conversation</p>
+                        <p className="text-xs text-gray-400 mt-1 text-center max-w-xs">Choose a contact to view past messages</p>
+                      </div>
+                    ) : loadingMessages ? (
+                      <div className="flex flex-col items-center justify-center h-full min-h-[200px] text-gray-500 text-sm gap-3">
+                        <div className="h-8 w-8 rounded-full border-2 border-sky-200 border-t-sky-600 animate-spin" />
+                        Loading messages…
+                      </div>
+                    ) : messages.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-full min-h-[200px] text-gray-500 text-sm motion-enter">
+                        No messages yet
+                      </div>
+                    ) : (
+                      messages.map((msg) => {
+                        const isOutgoing = msg.type === "outgoing";
+                        const content = msg.content || msg.message || "";
+                        const sentAt = msg.sentAt || msg.createdAt || msg.timestamp;
+                        return (
+                          <div
+                            key={msg.id || `${sentAt}-${content.slice(0, 20)}`}
+                            className={`flex ${isOutgoing ? "justify-end" : "justify-start"} mb-3 motion-enter`}
+                          >
+                            <div className={`flex items-end gap-2 max-w-[75%] ${isOutgoing ? "flex-row-reverse" : ""}`}>
+                              {!isOutgoing && (
+                                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-sky-500 to-blue-600 text-white flex items-center justify-center text-xs font-bold flex-shrink-0 shadow-md ring-2 ring-white">
+                                  {getInitial(selectedContact.name || selectedContact.phone)}
+                                </div>
+                              )}
+                              <div
+                                className={`rounded-2xl px-4 py-2.5 shadow-md ${
+                                  isOutgoing
+                                    ? "bg-gradient-to-br from-sky-700 to-slate-800 text-white rounded-bl-md ring-1 ring-sky-600/30"
+                                    : "bg-white text-gray-800 rounded-br-md border border-sky-100/90 ring-1 ring-gray-100/80"
+                                }`}
+                              >
+                                <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{content}</p>
+                                {sentAt && (
+                                  <p className={`text-[10px] mt-1.5 ${isOutgoing ? "text-sky-200" : "text-gray-400"}`}>
+                                    {formatMessageTime(sentAt)}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                    {selectedContact?.phone && messages.length > 0 && <div ref={messagesEndRef} />}
+                  </div>
+                </div>
+
+                <div className="w-80 flex flex-col overflow-y-auto flex-shrink-0 min-h-0 bg-white/90 backdrop-blur-sm border-l border-gray-200/80 shadow-sm">
+                  <div className="p-4 border-b border-gray-200/80 bg-gradient-to-r from-slate-50/80 to-sky-50/40">
+                    <h3 className="font-bold text-gray-900 tracking-tight">Chat Profile</h3>
+                    <p className="text-xs text-sky-700/80 mt-0.5">History details</p>
+                  </div>
+                  {selectedContact ? (
+                    <>
+                      <div className="p-4 flex flex-col items-center border-b border-gray-100/80">
+                        <div className="w-20 h-20 rounded-full bg-gradient-to-br from-sky-400 to-blue-700 text-white flex items-center justify-center text-2xl font-bold mb-3 shadow-lg shadow-sky-500/30 ring-4 ring-sky-100">
+                          {getInitial(selectedContact.name || selectedContact.phone)}
+                        </div>
+                        <p className="font-bold text-gray-900 text-center">{selectedContact.name || selectedContact.phone}</p>
+                        <p className="text-sky-600 font-semibold text-sm mt-1">{selectedContact.phone}</p>
+                      </div>
+                      <div className="px-4 pb-4 space-y-0 text-sm">
+                        {[
+                          { label: "Status", value: selectedContact?.status || "—" },
+                          { label: "Email", value: selectedContact?.email || "—" },
+                          { label: "Last message", value: selectedContactFromList?.lastMessage || "—" },
+                          { label: "Last message time", value: formatDateTime(selectedContactFromList?.lastMessageTime) },
+                          { label: "Unread", value: String(selectedContactFromList?.unreadCount ?? "—") },
+                          { label: "First message", value: messages.length ? (messages[0]?.content || messages[0]?.message || "—") : "—" },
+                          {
+                            label: "First message time",
+                            value: messages.length
+                              ? formatDateTime(messages[0]?.sentAt || messages[0]?.createdAt || messages[0]?.timestamp)
+                              : "—",
+                          },
+                          {
+                            label: "Last active",
+                            value: messages.length
+                              ? formatDateTime(
+                                  messages[messages.length - 1]?.sentAt ||
+                                    messages[messages.length - 1]?.createdAt ||
+                                    messages[messages.length - 1]?.timestamp
+                                )
+                              : formatDateTime(selectedContactFromList?.lastMessageTime),
+                          },
+                        ].map((row, i) => (
+                          <div key={i} className="flex justify-between py-2.5 border-b border-gray-100/90 gap-3">
+                            <span className="text-gray-500 text-xs font-medium shrink-0">{row.label}</span>
+                            <span className="text-gray-900 font-semibold text-xs text-right min-w-0 truncate">{row.value}</span>
+                          </div>
+                        ))}
+                        <div className="flex justify-between items-center py-2.5 border-b border-gray-100/90">
+                          <span className="text-gray-500 text-xs font-medium">Opted In</span>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={optedIn}
+                            onClick={() => setOptedIn(!optedIn)}
+                            className={`relative w-11 h-6 rounded-full transition-colors shadow-inner ${
+                              optedIn ? "bg-gradient-to-r from-sky-500 to-blue-600" : "bg-gray-300"
+                            }`}
+                          >
+                            <span
+                              className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow-md transition-transform ${
+                                optedIn ? "left-6" : "left-1"
+                              }`}
+                            />
+                          </button>
+                        </div>
+                      </div>
+                      {["Payments", "Campaigns", "Attributes", "Tags"].map((title) => {
+                        const key = title.toLowerCase();
+                        const isOpen = openSections[key];
+                        return (
+                          <div key={title} className="border-t border-gray-200/80">
+                            <button
+                              type="button"
+                              onClick={() => toggleSection(key)}
+                              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-bold text-gray-800 hover:bg-sky-50/50 transition"
+                            >
+                              {title}
+                              <svg
+                                className={`w-5 h-5 text-sky-600 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                              </svg>
+                            </button>
+                            {isOpen && (
+                              <div className="px-4 pb-3 text-sm text-gray-500 motion-enter">
+                                No {title.toLowerCase()} data.
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </>
+                  ) : (
+                    <div className="p-6 text-center text-gray-500 text-sm motion-enter">
+                      <p>Select a conversation</p>
                     </div>
-                  );
-                })}
-                  </>
-                ) : (
-                  <div className="p-4 text-center text-sm text-gray-500">Select a conversation</div>
-                )}
+                  )}
+                </div>
               </div>
             </div>
           </div>

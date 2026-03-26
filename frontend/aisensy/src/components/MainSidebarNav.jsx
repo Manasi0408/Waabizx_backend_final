@@ -1,10 +1,10 @@
 import { NavLink } from 'react-router-dom';
 
 const linkClass = ({ isActive }) =>
-  `flex flex-col items-center gap-1 px-2 py-3 rounded-lg transition group ${
+  `flex flex-col items-center gap-1 px-2 py-3 rounded-lg transition-all duration-300 ease-out will-change-transform group active:scale-[0.96] [&>svg]:transition-transform [&>svg]:duration-300 [&>svg]:ease-out group-hover:[&>svg]:scale-110 group-hover:[&>svg]:-rotate-6 ${
     isActive
-      ? 'bg-teal-800 text-white font-medium'
-      : 'text-teal-100 hover:bg-teal-800 hover:text-white'
+      ? 'bg-sky-600 text-white font-medium shadow-md shadow-sky-900/40 scale-[1.02]'
+      : 'text-sky-100/90 hover:bg-sky-800/90 hover:text-white hover:scale-[1.06] hover:shadow-lg'
   }`;
 
 const items = [
@@ -74,6 +74,20 @@ const items = [
     ),
   },
   {
+    to: '/flows',
+    label: 'Flows',
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M4 6h16M4 12h8M4 18h16M14 12l2 2 4-4"
+        />
+      </svg>
+    ),
+  },
+  {
     to: '/contacts',
     label: 'Contacts',
     icon: (
@@ -138,6 +152,7 @@ const items = [
 export default function MainSidebarNav({ navClassName = '', listClassName = 'space-y-1' }) {
   const navClasses = ['flex', 'h-full', 'min-h-0', 'flex-col', 'overflow-hidden', 'p-2', navClassName].filter(Boolean).join(' ');
   const listClasses = [
+    'sidebar-nav-stagger',
     'min-h-0',
     'flex-1',
     'overflow-y-auto',
