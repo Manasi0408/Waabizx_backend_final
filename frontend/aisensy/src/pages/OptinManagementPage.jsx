@@ -25,7 +25,7 @@ function ResponsePreview({ title, message }) {
   return (
     <div className="flex items-start gap-3">
       <div className="shrink-0 w-12 h-12 rounded-full bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-700 font-bold">
-        <span className="text-sm">A</span>
+        <span className="text-sm">W</span>
       </div>
       <div className="flex-1">
         <div className="rounded-2xl bg-gray-200/80 border border-gray-200/60 px-4 py-3 shadow-sm">

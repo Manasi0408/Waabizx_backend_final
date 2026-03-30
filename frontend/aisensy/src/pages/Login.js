@@ -1,12 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
-import { login } from '../services/authService';
+import { login, requestPasswordReset, resetPassword } from '../services/authService';
 
 const inputClass =
   'w-full rounded-xl border-2 border-gray-200/90 bg-white px-4 py-2.5 text-sm text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-400 focus:border-sky-400 focus:ring-4 focus:ring-sky-500/10 sm:py-3';
 
 const AUTH_MARQUEE_TAGS = [
-  'AiSensy',
+  'Waabizx',
   'WhatsApp Business',
   'Broadcast',
   'Templates',
@@ -25,8 +25,33 @@ function Login() {
     password: '',
   });
   const showRegisteredMessage = !!location.state?.registered;
+  const showPasswordResetMessage = !!location.state?.passwordReset;
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const [forgotOpen, setForgotOpen] = useState(location.pathname === '/login/forgot-password');
+  const [forgotStep, setForgotStep] = useState('request'); // request | reset
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotOtp, setForgotOtp] = useState('');
+  const [forgotNewPassword, setForgotNewPassword] = useState('');
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotError, setForgotError] = useState('');
+
+  const isForgotPasswordRoute = location.pathname === '/login/forgot-password';
+
+  useEffect(() => {
+    setForgotOpen(isForgotPasswordRoute);
+    if (isForgotPasswordRoute) {
+      setForgotStep('request');
+      setForgotError('');
+      setForgotLoading(false);
+      setForgotOtp('');
+      setForgotNewPassword('');
+      setForgotConfirmPassword('');
+      setForgotEmail(location.state?.email ?? formData.email ?? '');
+    }
+  }, [isForgotPasswordRoute]);
 
   const handleChange = (e) => {
     setFormData({
@@ -58,6 +83,55 @@ function Login() {
       setError(err.message || 'Login failed. Please try again.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleForgotRequest = async (e) => {
+    e?.preventDefault?.();
+    setForgotError('');
+    setForgotLoading(true);
+    setForgotOtp('');
+    try {
+      const response = await requestPasswordReset(forgotEmail);
+      if (response?.otp) {
+        setForgotOtp(String(response.otp));
+      }
+      setForgotStep('reset');
+    } catch (err) {
+      setForgotError(err.message || 'Failed to send OTP');
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleForgotReset = async (e) => {
+    e?.preventDefault?.();
+    setForgotError('');
+
+    if (forgotNewPassword !== forgotConfirmPassword) {
+      setForgotError('Passwords do not match');
+      return;
+    }
+
+    setForgotLoading(true);
+    try {
+      const response = await resetPassword(forgotEmail, forgotOtp, forgotNewPassword);
+      if (response?.success) {
+        setForgotOpen(false);
+        setForgotStep('request');
+        setForgotEmail('');
+        setForgotOtp('');
+        setForgotNewPassword('');
+        setForgotConfirmPassword('');
+
+        navigate('/login', { state: { passwordReset: true }, replace: true });
+      } else {
+        setForgotError(response?.message || 'Password reset failed');
+      }
+    } catch (err) {
+      setForgotError(err.message || 'Password reset failed');
+    } finally {
+      setForgotLoading(false);
     }
   };
 
@@ -97,7 +171,7 @@ function Login() {
             className="pointer-events-none absolute bottom-8 right-2 select-none text-[11rem] font-black leading-none text-white/[0.04] xl:text-[13rem]"
             aria-hidden
           >
-            A
+            W
           </span>
 
           <div className="relative z-10 flex h-full min-h-0 flex-col overflow-hidden px-8 py-8 text-white shadow-2xl shadow-black/20 xl:px-11 xl:py-10">
@@ -110,11 +184,11 @@ function Login() {
                   <div className="auth-logo-orbit-ring--reverse h-[44px] w-[44px] rounded-full border border-dashed border-white/30 xl:h-[50px] xl:w-[50px]" />
                 </div>
                 <div className="auth-brand-logo-pulse relative z-10 flex h-11 w-11 items-center justify-center rounded-xl bg-white/12 text-base font-bold shadow-lg ring-1 ring-white/25 backdrop-blur-md xl:h-12 xl:w-12 xl:text-lg">
-                  A
+                  W
                 </div>
               </div>
               <div className="min-w-0">
-                <p className="text-base font-bold tracking-tight xl:text-lg">AiSensy</p>
+                <p className="text-base font-bold tracking-tight xl:text-lg">Waabizx</p>
                 <p className="text-[10px] font-medium uppercase tracking-wider text-sky-200/80 xl:text-[11px]">
                   WhatsApp Business Platform
                 </p>
@@ -192,7 +266,7 @@ function Login() {
                         </svg>
                       </span>
                       <div className="min-w-0">
-                        <p className="truncate text-[10px] font-bold text-white xl:text-[11px]">AiSensy Inbox</p>
+                        <p className="truncate text-[10px] font-bold text-white xl:text-[11px]">Waabizx Inbox</p>
                         <p className="truncate text-[9px] font-medium text-sky-200/70">Live conversation preview</p>
                       </div>
                     </div>
@@ -215,7 +289,7 @@ function Login() {
                         <p className="text-[10px] font-semibold leading-snug text-white xl:text-[11px]">
                           Yes! Shipped this morning. ETA: 4:30 PM. Track link sent ✓
                         </p>
-                        <p className="mt-0.5 text-right text-[9px] font-medium text-sky-100/70">AiSensy · auto</p>
+                        <p className="mt-0.5 text-right text-[9px] font-medium text-sky-100/70">Waabizx · auto</p>
                       </div>
                     </div>
                     <div className="flex justify-start pt-0.5">
@@ -261,7 +335,7 @@ function Login() {
 
             <div className="mt-2 shrink-0 rounded-xl border border-white/15 bg-gradient-to-br from-white/[0.16] to-white/[0.05] p-3.5 shadow-xl backdrop-blur-xl xl:mt-3 xl:rounded-2xl xl:p-4">
               <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-sky-200/90 xl:mb-3 xl:text-[11px]">
-                Why teams choose AiSensy
+                Why teams choose Waabizx
               </p>
               <ul className="space-y-2 text-xs font-medium leading-snug text-white/95 xl:space-y-2.5 xl:text-sm">
                 {[
@@ -293,22 +367,36 @@ function Login() {
           <div className="mx-auto w-full max-w-md shrink-0">
             <div className="mb-4 text-center lg:hidden">
               <div className="mx-auto mb-2 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-blue-700 text-lg font-bold text-white shadow-lg shadow-sky-600/35 ring-2 ring-white">
-                A
+                W
               </div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-sky-600/90">AiSensy</p>
+              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-sky-600/90">Waabizx</p>
             </div>
 
-            <div className="mb-4 text-center lg:mb-5 lg:text-left">
-              <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.2em] text-sky-600/90 lg:mb-1.5 lg:text-[11px] lg:text-sky-600">
-                Sign in
-              </p>
-              <h1 className="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl">
-                <span className="bg-gradient-to-r from-gray-900 via-sky-800 to-gray-800 bg-clip-text text-transparent">
-                  Welcome back
-                </span>
-              </h1>
-              <p className="mt-1 text-xs text-gray-600 sm:text-sm">Use your work email to access the dashboard.</p>
-            </div>
+            {!forgotOpen ? (
+              <div className="mb-4 text-center lg:mb-5 lg:text-left">
+                <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.2em] text-sky-600/90 lg:mb-1.5 lg:text-[11px] lg:text-sky-600">
+                  Sign in
+                </p>
+                <h1 className="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl">
+                  <span className="bg-gradient-to-r from-gray-900 via-sky-800 to-gray-800 bg-clip-text text-transparent">
+                    Welcome back
+                  </span>
+                </h1>
+                <p className="mt-1 text-xs text-gray-600 sm:text-sm">Use your work email to access the dashboard.</p>
+              </div>
+            ) : (
+              <div className="mb-4 text-center lg:mb-5 lg:text-left">
+                <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.2em] text-sky-600/90 lg:mb-1.5 lg:text-[11px] lg:text-sky-600">
+                  Forgot password
+                </p>
+                <h1 className="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl">
+                  <span className="bg-gradient-to-r from-gray-900 via-sky-800 to-gray-800 bg-clip-text text-transparent">
+                    Reset password
+                  </span>
+                </h1>
+                <p className="mt-1 text-xs text-gray-600 sm:text-sm">Enter your email to receive an OTP.</p>
+              </div>
+            )}
 
             <div className="relative overflow-hidden rounded-2xl border border-gray-100/90 bg-white/95 p-5 shadow-xl shadow-sky-900/[0.06] ring-1 ring-gray-100/80 backdrop-blur-sm sm:p-6">
               <div
@@ -317,7 +405,9 @@ function Login() {
               />
 
               <div className="relative pt-1">
-                {showRegisteredMessage && (
+                {!forgotOpen && (
+                  <>
+                    {showRegisteredMessage && (
                   <div
                     className="mb-4 rounded-xl border border-emerald-200/90 bg-gradient-to-r from-emerald-50/90 to-teal-50/50 p-3 text-xs font-medium text-emerald-900 ring-1 ring-emerald-100/80 sm:p-4 sm:text-sm"
                     role="status"
@@ -332,6 +422,23 @@ function Login() {
                       </svg>
                     </span>
                     Account created successfully. Please sign in.
+                  </div>
+                )}
+                {showPasswordResetMessage && (
+                  <div
+                    className="mb-4 rounded-xl border border-emerald-200/90 bg-gradient-to-r from-emerald-50/90 to-teal-50/50 p-3 text-xs font-medium text-emerald-900 ring-1 ring-emerald-100/80 sm:p-4 sm:text-sm"
+                    role="status"
+                  >
+                    <span className="mr-2 inline-flex h-6 w-6 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
+                      <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden>
+                        <path
+                          fillRule="evenodd"
+                          d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                          clipRule="evenodd"
+                        />
+                      </svg>
+                    </span>
+                    Password reset successfully. Please sign in.
                   </div>
                 )}
                 {error && (
@@ -379,12 +486,17 @@ function Login() {
                   </div>
 
                   <div className="flex items-center justify-end">
-                    <Link
-                      to="#"
+                    <button
+                      type="button"
                       className="text-sm font-semibold text-sky-600 transition-colors hover:text-sky-800"
+                      onClick={() => {
+                        navigate('/login/forgot-password', {
+                          state: { email: formData.email || '' }
+                        });
+                      }}
                     >
                       Forgot password?
-                    </Link>
+                    </button>
                   </div>
 
                   <button
@@ -401,24 +513,157 @@ function Login() {
                       'Sign in'
                     )}
                   </button>
-                </form>
+                  </form>
+                  </>
+                )}
 
-                <div className="relative mt-5 border-t border-gray-100/90 pt-4 text-center sm:mt-6 sm:pt-5">
-                  <p className="text-xs text-gray-600 sm:text-sm">
-                    Don&apos;t have an account?{' '}
-                    <Link to="/register" className="font-bold text-sky-600 transition-colors hover:text-sky-800">
-                      Create one free
-                    </Link>
-                  </p>
-                </div>
+                {forgotOpen && (
+                  <div className="mt-4 rounded-xl border border-sky-100/90 bg-sky-50/40 p-4 sm:p-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-bold text-sky-800">Forgot password</p>
+                      <button
+                        type="button"
+                        className="text-sm font-semibold text-sky-600 transition-colors hover:text-sky-800"
+                        onClick={() => {
+                          navigate('/login', { replace: true });
+                        }}
+                      >
+                        Close
+                      </button>
+                    </div>
+
+                    {forgotError && (
+                      <div
+                        className="mt-3 rounded-xl border border-red-200/90 bg-red-50/90 p-3 text-xs font-medium text-red-800 ring-1 ring-red-100/80 sm:p-4 sm:text-sm"
+                        role="alert"
+                      >
+                        {forgotError}
+                      </div>
+                    )}
+
+                    {forgotStep === 'request' ? (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleForgotRequest(e);
+                        }}
+                        className="mt-3 space-y-3.5 sm:space-y-4"
+                      >
+                        <div>
+                          <label htmlFor="forgotEmail" className="mb-1.5 block text-[10px] font-bold uppercase tracking-wide text-gray-500 sm:mb-2 sm:text-xs">
+                            Email
+                          </label>
+                          <input
+                            type="email"
+                            id="forgotEmail"
+                            name="forgotEmail"
+                            value={forgotEmail}
+                            onChange={(e) => setForgotEmail(e.target.value)}
+                            required
+                            autoComplete="email"
+                            className={inputClass}
+                            placeholder="you@company.com"
+                          />
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={forgotLoading}
+                          className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 py-3 text-sm font-bold text-white shadow-lg shadow-sky-600/25 transition-all hover:from-sky-500 hover:to-blue-500 hover:shadow-xl active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none sm:min-h-[48px] sm:py-3.5"
+                        >
+                          {forgotLoading ? 'Sending…' : 'Send OTP'}
+                        </button>
+                      </form>
+                    ) : (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleForgotReset(e);
+                        }}
+                        className="mt-3 space-y-3.5 sm:space-y-4"
+                      >
+                        <div>
+                          <label htmlFor="forgotOtp" className="mb-1.5 block text-[10px] font-bold uppercase tracking-wide text-gray-500 sm:mb-2 sm:text-xs">
+                            OTP
+                          </label>
+                          <input
+                            type="text"
+                            id="forgotOtp"
+                            name="forgotOtp"
+                            value={forgotOtp}
+                            onChange={(e) => setForgotOtp(e.target.value.replace(/\\D/g, '').slice(0, 6))}
+                            required
+                            inputMode="numeric"
+                            className={inputClass}
+                            placeholder="Enter OTP"
+                          />
+                        </div>
+
+                        <div>
+                          <label htmlFor="forgotNewPassword" className="mb-1.5 block text-[10px] font-bold uppercase tracking-wide text-gray-500 sm:mb-2 sm:text-xs">
+                            New password
+                          </label>
+                          <input
+                            type="password"
+                            id="forgotNewPassword"
+                            name="forgotNewPassword"
+                            value={forgotNewPassword}
+                            onChange={(e) => setForgotNewPassword(e.target.value)}
+                            required
+                            autoComplete="new-password"
+                            className={inputClass}
+                            placeholder="At least 4 characters"
+                          />
+                        </div>
+
+                        <div>
+                          <label htmlFor="forgotConfirmPassword" className="mb-1.5 block text-[10px] font-bold uppercase tracking-wide text-gray-500 sm:mb-2 sm:text-xs">
+                            Confirm password
+                          </label>
+                          <input
+                            type="password"
+                            id="forgotConfirmPassword"
+                            name="forgotConfirmPassword"
+                            value={forgotConfirmPassword}
+                            onChange={(e) => setForgotConfirmPassword(e.target.value)}
+                            required
+                            autoComplete="new-password"
+                            className={inputClass}
+                            placeholder="Repeat password"
+                          />
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={forgotLoading}
+                          className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 py-3 text-sm font-bold text-white shadow-lg shadow-sky-600/25 transition-all hover:from-sky-500 hover:to-blue-500 hover:shadow-xl active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none sm:min-h-[48px] sm:py-3.5"
+                        >
+                          {forgotLoading ? 'Resetting…' : 'Reset password'}
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                )}
+
+                {!forgotOpen && (
+                  <div className="relative mt-5 border-t border-gray-100/90 pt-4 text-center sm:mt-6 sm:pt-5">
+                    <p className="text-xs text-gray-600 sm:text-sm">
+                      Don&apos;t have an account?{' '}
+                      <Link to="/register" className="font-bold text-sky-600 transition-colors hover:text-sky-800">
+                        Create one free
+                      </Link>
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
-
-            <p className="mt-4 text-center text-[10px] leading-relaxed text-gray-500 sm:mt-5 sm:text-xs">
-              By signing in, you agree to our{' '}
-              <span className="font-medium text-gray-600">Terms of Service</span> and{' '}
-              <span className="font-medium text-gray-600">Privacy Policy</span>
-            </p>
+            {!forgotOpen && (
+              <p className="mt-4 text-center text-[10px] leading-relaxed text-gray-500 sm:mt-5 sm:text-xs">
+                By signing in, you agree to our{' '}
+                <span className="font-medium text-gray-600">Terms of Service</span> and{' '}
+                <span className="font-medium text-gray-600">Privacy Policy</span>
+              </p>
+            )}
           </div>
         </main>
       </div>

@@ -1,10 +1,11 @@
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
-const { User } = require('../models');
+const { User, PasswordResetToken } = require('../models');
 const Setting = require('../models/Setting');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
+const nodemailer = require('nodemailer');
 const { sendMessage } = require('../services/aisensyService');
 const { sendTemplate: sendMetaTemplate } = require('../services/whatsappService');
 
@@ -23,12 +24,47 @@ const generateToken = (id, sessionId) => {
 
 const pendingRegisterOtps = new Map();
 const OTP_VALIDITY_MS = 50 * 1000;
+const PASSWORD_RESET_OTP_VALIDITY_MS = 10 * 60 * 1000; // 10 minutes
+const PASSWORD_RESET_OTP_HASH_SALT = process.env.PASSWORD_RESET_OTP_SALT || process.env.JWT_SECRET || 'password-reset-otp-salt';
 
 const normalizeMobileNumber = (value) => {
   return String(value || '').replace(/\D/g, '').trim();
 };
 
 const createOtpCode = () => String(Math.floor(100000 + Math.random() * 900000));
+
+const hashPasswordResetOtp = (otp) => {
+  return crypto
+    .createHmac('sha256', PASSWORD_RESET_OTP_HASH_SALT)
+    .update(String(otp))
+    .digest('hex');
+};
+
+const sendOtpToEmail = async (email, otp) => {
+  const smtpHost = process.env.SMTP_HOST || process.env.EMAIL_HOST;
+  const smtpPort = Number(process.env.SMTP_PORT || process.env.EMAIL_PORT || 587);
+  const smtpUser = process.env.SMTP_USER || process.env.EMAIL_USER;
+  const smtpPass = process.env.SMTP_PASS || process.env.EMAIL_PASS;
+  const fromAddress = process.env.SMTP_FROM || process.env.EMAIL_FROM;
+
+  if (!smtpHost || !smtpUser || !smtpPass || !fromAddress) {
+    throw new Error('Email transport is not configured.');
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    auth: { user: smtpUser, pass: smtpPass },
+  });
+
+  await transporter.sendMail({
+    from: fromAddress,
+    to: email,
+    subject: 'Your password reset OTP',
+    text: `Your password reset OTP is: ${otp}\n\nIt will expire in 10 minutes.`,
+  });
+};
 
 const getMetaPhoneNumberId = () =>
   process.env.WHATSAPP_PHONE_NUMBER_ID ||
@@ -560,6 +596,130 @@ exports.verifyRegisterOtp = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to verify OTP',
+    });
+  }
+};
+
+exports.requestPasswordReset = async (req, res) => {
+  try {
+    const body = req.body || {};
+    const email = String(body.email || body.Email || body.EMAIL || '').trim().toLowerCase();
+
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({ success: false, message: 'Please provide a valid email address' });
+    }
+
+    const user = await User.findOne({ where: { email } });
+
+    // Do not reveal whether the email exists
+    if (!user) {
+      return res.status(200).json({
+        success: true,
+        message: 'If an account exists, you will receive an OTP shortly.'
+      });
+    }
+
+    const otp = createOtpCode();
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_OTP_VALIDITY_MS);
+    const otpHash = hashPasswordResetOtp(otp);
+
+    await PasswordResetToken.destroy({ where: { email, usedAt: null } });
+
+    await PasswordResetToken.create({
+      email,
+      otpHash,
+      expiresAt,
+      usedAt: null
+    });
+
+    const smtpHost = process.env.SMTP_HOST || process.env.EMAIL_HOST;
+    const smtpPort = process.env.SMTP_PORT || process.env.EMAIL_PORT;
+    const smtpUser = process.env.SMTP_USER || process.env.EMAIL_USER;
+    const smtpPass = process.env.SMTP_PASS || process.env.EMAIL_PASS;
+    const smtpFrom = process.env.SMTP_FROM || process.env.EMAIL_FROM;
+
+    const isSmtpConfigured = Boolean(smtpHost && smtpPort && smtpUser && smtpPass && smtpFrom);
+
+    if (isSmtpConfigured) {
+      await sendOtpToEmail(user.email, otp);
+      return res.status(200).json({
+        success: true,
+        message: 'OTP sent to email',
+        email,
+        expiresInSeconds: Math.floor(PASSWORD_RESET_OTP_VALIDITY_MS / 1000),
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'OTP generated (SMTP not configured). Use the OTP shown to reset password.',
+      email,
+      otp,
+      expiresInSeconds: Math.floor(PASSWORD_RESET_OTP_VALIDITY_MS / 1000),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to request password reset'
+    });
+  }
+};
+
+exports.resetPassword = async (req, res) => {
+  try {
+    const body = req.body || {};
+    const email = String(body.email || body.Email || body.EMAIL || '').trim().toLowerCase();
+    const otp = String(body.otp || '').trim();
+    const newPassword =
+      body.newPassword || body.password || body.new_password || body.Password || body.PASSWORD || '';
+    const trimmedNewPassword = String(newPassword).trim();
+
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({ success: false, message: 'Please provide a valid email address' });
+    }
+    if (!otp) {
+      return res.status(400).json({ success: false, message: 'OTP is required' });
+    }
+    if (!trimmedNewPassword || trimmedNewPassword.length < 4) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 4 characters long' });
+    }
+
+    const pending = await PasswordResetToken.findOne({
+      where: { email, usedAt: null },
+    });
+
+    if (!pending) {
+      return res.status(400).json({ success: false, message: 'No pending password reset found. Please request again.' });
+    }
+
+    if (pending.expiresAt && pending.expiresAt.getTime() < Date.now()) {
+      return res.status(400).json({ success: false, message: 'OTP expired. Please request again.' });
+    }
+
+    const otpHash = hashPasswordResetOtp(otp);
+    if (pending.otpHash !== otpHash) {
+      return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    }
+
+    const user = await User.findOne({ where: { email } });
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Account not found' });
+    }
+
+    user.password = trimmedNewPassword;
+    await user.save();
+
+    pending.usedAt = new Date();
+    await pending.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password reset successfully'
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to reset password'
     });
   }
 };

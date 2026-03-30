@@ -1013,10 +1013,10 @@ function Flows() {
               }}
             >
               <div className="w-10 h-10 bg-gradient-to-br from-sky-500 via-sky-600 to-blue-900 rounded-xl flex items-center justify-center shadow-lg shadow-sky-500/30 ring-2 ring-white">
-                <span className="text-white font-bold text-lg">A</span>
+                <span className="text-white font-bold text-lg">W</span>
               </div>
               <h1 className="text-xl md:text-2xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent hidden sm:block">
-                AiSensy
+                Waabizx
               </h1>
             </div>
             <span className="text-gray-300 hidden md:block shrink-0">|</span>

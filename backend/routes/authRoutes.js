@@ -5,6 +5,8 @@ const {
   requestRegisterOtp,
   resendRegisterOtp,
   verifyRegisterOtp,
+  requestPasswordReset,
+  resetPassword,
   login,
   getProfile,
   updateProfile,
@@ -54,6 +56,8 @@ router.post('/register', register);
 router.post('/register/request-otp', requestRegisterOtp);
 router.post('/register/resend-otp', resendRegisterOtp);
 router.post('/register/verify-otp', verifyRegisterOtp);
+router.post('/forgot-password/request', requestPasswordReset);
+router.post('/forgot-password/reset', resetPassword);
 router.post('/login', login);
 router.get('/profile', protect, getProfile);
 router.put('/profile', protect, updateProfile);

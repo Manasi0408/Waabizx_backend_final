@@ -6,7 +6,7 @@ const inputClass =
   'w-full rounded-xl border-2 border-gray-200/90 bg-white px-4 py-2.5 text-sm text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-400 focus:border-sky-400 focus:ring-4 focus:ring-sky-500/10 sm:py-3';
 
 const AUTH_MARQUEE_TAGS = [
-  'AiSensy',
+  'Waabizx',
   'WhatsApp OTP',
   'Verification',
   'Secure Login',
@@ -100,16 +100,16 @@ function RegisterOtpVerification() {
             className="pointer-events-none absolute bottom-8 right-2 select-none text-[11rem] font-black leading-none text-white/[0.04] xl:text-[13rem]"
             aria-hidden
           >
-            A
+            W
           </span>
 
           <div className="relative z-10 flex h-full min-h-0 flex-col overflow-hidden px-8 py-8 text-white shadow-2xl shadow-black/20 xl:px-11 xl:py-10">
             <header className="flex shrink-0 items-center gap-3.5">
               <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/12 text-lg font-bold ring-1 ring-white/25 backdrop-blur-md">
-                A
+                W
               </div>
               <div className="min-w-0">
-                <p className="text-base font-bold tracking-tight xl:text-lg">AiSensy</p>
+                <p className="text-base font-bold tracking-tight xl:text-lg">Waabizx</p>
                 <p className="text-[10px] font-medium uppercase tracking-wider text-sky-200/80 xl:text-[11px]">
                   WhatsApp Business Platform
                 </p>

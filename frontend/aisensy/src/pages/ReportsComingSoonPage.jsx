@@ -163,7 +163,7 @@ export default function ReportsComingSoonPage() {
 
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 bg-gradient-to-br from-sky-500 via-sky-600 to-blue-900 rounded-xl flex items-center justify-center shadow-lg shadow-sky-500/30 ring-2 ring-white">
-              <span className="text-white font-bold text-lg">A</span>
+              <span className="text-white font-bold text-lg">W</span>
             </div>
             <div className="min-w-0">
               <h2 className="text-lg font-semibold text-sky-700 tracking-tight truncate">Reports</h2>

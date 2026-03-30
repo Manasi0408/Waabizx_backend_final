@@ -312,7 +312,7 @@ function LiveChatPage() {
     };
   }, [selectedChat, tab, isManager, isAgent, loadChats]);
 
-  // Poll like AiSensy: refresh conversation list and messages so new messages appear in active/requesting/intervened
+  // Poll like Waabizx: refresh conversation list and messages so new messages appear in active/requesting/intervened
   useEffect(() => {
     const POLL_MS = 5000;
     const refreshList = async () => {
@@ -865,7 +865,7 @@ function LiveChatPage() {
                           )}
                           {msg.sender === "agent" && (
                             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-sky-700 to-slate-800 text-white flex items-center justify-center text-xs font-bold flex-shrink-0 shadow-md ring-2 ring-white">
-                              A
+                              W
                             </div>
                           )}
                           <div

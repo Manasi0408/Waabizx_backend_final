@@ -73,10 +73,10 @@ function AgentTopbar({ onMenuClick }) {
             state={project ? { project } : undefined}
           >
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-900 flex items-center justify-center shadow-md shadow-sky-500/25 ring-2 ring-white">
-              <span className="text-white font-bold text-sm">A</span>
+              <span className="text-white font-bold text-sm">W</span>
             </div>
             <span className="text-sm font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent">
-              AiSensy
+              Waabizx
             </span>
           </Link>
 

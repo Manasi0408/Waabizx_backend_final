@@ -6,7 +6,7 @@ const inputClass =
   'w-full rounded-xl border-2 border-gray-200/90 bg-white px-4 py-2.5 text-sm text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-400 focus:border-sky-400 focus:ring-4 focus:ring-sky-500/10 sm:py-3';
 
 const AUTH_MARQUEE_TAGS = [
-  'AiSensy',
+  'Waabizx',
   'WhatsApp Business',
   'Onboarding',
   'Templates',
@@ -112,7 +112,7 @@ function Register() {
             className="pointer-events-none absolute bottom-6 right-0 select-none text-[11rem] font-black leading-none text-white/[0.035] xl:text-[13rem]"
             aria-hidden
           >
-            A
+            W
           </span>
 
           <div className="relative z-10 flex h-full min-h-0 flex-col overflow-hidden px-8 py-8 text-white shadow-2xl shadow-black/20 xl:px-11 xl:py-10">
@@ -125,11 +125,11 @@ function Register() {
                   <div className="auth-logo-orbit-ring--reverse h-[44px] w-[44px] rounded-full border border-dashed border-white/30 xl:h-[50px] xl:w-[50px]" />
                 </div>
                 <div className="auth-brand-logo-pulse relative z-10 flex h-11 w-11 items-center justify-center rounded-xl bg-white/12 text-base font-bold shadow-lg ring-1 ring-white/25 backdrop-blur-md xl:h-12 xl:w-12 xl:text-lg">
-                  A
+                  W
                 </div>
               </div>
               <div className="min-w-0">
-                <p className="text-base font-bold tracking-tight xl:text-lg">AiSensy</p>
+                <p className="text-base font-bold tracking-tight xl:text-lg">Waabizx</p>
                 <p className="text-[10px] font-medium uppercase tracking-wider text-sky-200/80 xl:text-[11px]">
                   WhatsApp Business Platform
                 </p>
@@ -207,7 +207,7 @@ function Register() {
                         </svg>
                       </span>
                       <div className="min-w-0">
-                        <p className="truncate text-[10px] font-bold text-white xl:text-[11px]">AiSensy Setup</p>
+                        <p className="truncate text-[10px] font-bold text-white xl:text-[11px]">Waabizx Setup</p>
                         <p className="truncate text-[9px] font-medium text-teal-200/70">Guided onboarding preview</p>
                       </div>
                     </div>
@@ -222,7 +222,7 @@ function Register() {
                         <p className="text-[10px] font-medium leading-snug text-white/95 xl:text-[11px]">
                           Welcome! Connect your WhatsApp Business number to start onboarding.
                         </p>
-                        <p className="mt-0.5 text-[9px] text-white/40">AiSensy · setup</p>
+                        <p className="mt-0.5 text-[9px] text-white/40">Waabizx · setup</p>
                       </div>
                     </div>
                     <div className="flex justify-end">
@@ -276,7 +276,7 @@ function Register() {
 
             <div className="mt-2 shrink-0 rounded-xl border border-white/15 bg-gradient-to-br from-white/[0.16] to-white/[0.05] p-3.5 shadow-xl backdrop-blur-xl xl:mt-3 xl:rounded-2xl xl:p-4">
               <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-teal-200/85 xl:mb-3 xl:text-[11px]">
-                What you unlock with AiSensy
+                What you unlock with Waabizx
               </p>
               <ul className="space-y-2 text-xs font-medium leading-snug text-white/95 xl:space-y-2.5 xl:text-sm">
                 {[
@@ -303,30 +303,26 @@ function Register() {
           </div>
         </aside>
 
-        <main className={`flex h-full min-h-0 flex-col overflow-hidden px-4 sm:px-6 lg:px-10 xl:px-14 ${hasError ? 'justify-start py-2 lg:py-2' : 'justify-center py-5'}`}>
+        <main className={`flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain px-4 sm:px-6 lg:px-10 xl:px-14 ${hasError ? 'justify-start py-2 lg:py-2' : 'justify-center py-5'}`}>
           <div className="mx-auto w-full max-w-md shrink-0">
-            {!hasError && (
-              <div className="mb-3 text-center lg:hidden">
-                <div className="mx-auto mb-1.5 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-blue-700 text-base font-bold text-white shadow-lg shadow-sky-600/35 ring-2 ring-white">
-                  A
-                </div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-sky-600/90">AiSensy</p>
+            <div className="mb-3 text-center lg:hidden">
+              <div className="mx-auto mb-1.5 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-blue-700 text-base font-bold text-white shadow-lg shadow-sky-600/35 ring-2 ring-white">
+                W
               </div>
-            )}
+              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-sky-600/90">Waabizx</p>
+            </div>
 
-            {!error && (
-              <div className="mt-2 mb-3 text-center lg:mt-3 lg:mb-4 lg:text-left">
-                <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.2em] text-sky-600/90 lg:mb-1.5 lg:text-[11px] lg:text-sky-600">
-                  Create account
-                </p>
-                <h1 className="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl">
-                  <span className="bg-gradient-to-r from-gray-900 via-sky-800 to-gray-800 bg-clip-text text-transparent">
-                    Join AiSensy
-                  </span>
-                </h1>
-                <p className="mt-0.5 text-xs text-gray-600 sm:text-sm">Set up your profile — invite your team later.</p>
-              </div>
-            )}
+            <div className="mt-2 mb-3 text-center lg:mt-3 lg:mb-4 lg:text-left">
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.2em] text-sky-600/90 lg:mb-1.5 lg:text-[11px] lg:text-sky-600">
+                Create account
+              </p>
+              <h1 className="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl">
+                <span className="bg-gradient-to-r from-gray-900 via-sky-800 to-gray-800 bg-clip-text text-transparent">
+                  Join Waabizx
+                </span>
+              </h1>
+              <p className="mt-0.5 text-xs text-gray-600 sm:text-sm">Set up your profile — invite your team later.</p>
+            </div>
 
             <div className={`relative overflow-hidden rounded-2xl border border-gray-100/90 bg-white/95 shadow-xl shadow-sky-900/[0.06] ring-1 ring-gray-100/80 backdrop-blur-sm ${hasError ? 'p-3 sm:p-4' : 'p-4 sm:p-5'}`}>
               <div

@@ -54,7 +54,7 @@ function AgentSidebar({ open = true }) {
       }`}
     >
       <div className="w-10 h-10 mb-10 flex items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-900 shadow-lg shadow-sky-900/40 ring-2 ring-sky-400/30">
-        <span className="text-white font-bold text-lg">A</span>
+        <span className="text-white font-bold text-lg">W</span>
       </div>
 
       <nav className="flex flex-col items-center gap-1 w-full px-2">

@@ -58,7 +58,7 @@ function AgentRightPanel() {
         key: createOrderData.keyId,
         amount: String(createOrderData.amount),
         currency: createOrderData.currency,
-        name: "AiSensy",
+        name: "Waabizx",
         description: "Purchase WhatsApp Conversation Credits (WCC)",
         order_id: createOrderData.orderId,
         handler: async function (response) {

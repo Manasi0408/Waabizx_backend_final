@@ -12,7 +12,7 @@ function Chatbot() {
   const [messages, setMessages] = useState([
     {
       id: 1,
-      text: "Hello! 👋 I'm here to help you with AiSensy. How can I assist you today?",
+      text: "Hello! 👋 I'm here to help you with Waabizx. How can I assist you today?",
       sender: 'bot',
       timestamp: new Date(),
       menuButtons: [
@@ -57,7 +57,7 @@ function Chatbot() {
         setMessages([
           {
             id: 1,
-            text: "Hello! 👋 I'm here to help you with AiSensy. How can I assist you today?",
+            text: "Hello! 👋 I'm here to help you with Waabizx. How can I assist you today?",
             sender: 'bot',
             timestamp: new Date(),
             menuButtons: [
@@ -401,7 +401,7 @@ function Chatbot() {
                 </svg>
               </div>
               <div className="min-w-0">
-                <h3 className="truncate text-[15px] font-bold tracking-tight sm:text-base">AiSensy Support</h3>
+                <h3 className="truncate text-[15px] font-bold tracking-tight sm:text-base">Waabizx Support</h3>
                 <p className="text-xs font-medium text-sky-100/95">We&apos;re here to help ✨</p>
               </div>
             </div>

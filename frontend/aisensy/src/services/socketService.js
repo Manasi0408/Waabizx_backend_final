@@ -26,7 +26,7 @@ export const initializeSocket = (userId, token) => {
       // Legacy inbox: user-specific room
       socket.emit('join-user', userId);
 
-      // AiSensy-style routing: join agent_*/manager rooms based on role
+      // Waabizx-style routing: join agent_*/manager rooms based on role
       let role = null;
       try {
         const storedRole = localStorage.getItem("role");

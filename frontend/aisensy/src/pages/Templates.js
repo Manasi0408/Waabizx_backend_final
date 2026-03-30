@@ -411,10 +411,10 @@ function Templates() {
 
           <Link to="/dashboard" className="flex items-center gap-3 transition-all duration-300 hover:opacity-90 hover:scale-[1.02] active:scale-[0.98]">
             <div className="w-10 h-10 bg-gradient-to-br from-sky-500 via-sky-600 to-blue-900 rounded-xl flex items-center justify-center shadow-lg shadow-sky-500/30 ring-2 ring-white">
-              <span className="text-white font-bold text-lg">A</span>
+              <span className="text-white font-bold text-lg">W</span>
             </div>
             <h1 className="text-xl md:text-2xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent hidden sm:block">
-              AiSensy
+              Waabizx
             </h1>
           </Link>
 
@@ -942,7 +942,7 @@ function Templates() {
                     <div className="px-4 py-3 border-2 border-sky-200 rounded-xl bg-white text-sm text-gray-800 font-mono">
                       Your OTP is {'{{1}}'}. Do not share it with anyone.
                     </div>
-                    <p className="mt-1.5 text-xs text-gray-500">For Authentication category, message format is auto-handled by AiSensy.</p>
+                    <p className="mt-1.5 text-xs text-gray-500">For Authentication category, message format is auto-handled by Waabizx.</p>
                   </div>
                 ) : (
                   <div>

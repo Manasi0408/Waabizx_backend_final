@@ -15,6 +15,7 @@ const CannedMessage = require('./CannedMessage');
 const Flow = require("./Flow");
 const Account = require('./Account');
 const RealConversation = require('./RealConversation');
+const PasswordResetToken = require('./PasswordResetToken');
 
 // Import meta models for webhooks
 const WebhookLog = require('./metaWebhook')(sequelize, DataTypes);
@@ -165,6 +166,14 @@ const syncDatabase = async () => {
     } catch (flowError) {
       console.error("⚠️ Flow table sync error:", flowError.message);
     }
+
+    // Ensure PasswordResetToken table exists
+    try {
+      await PasswordResetToken.sync({ force: false, alter: true });
+      console.log('✅ PasswordResetToken table verified/created.');
+    } catch (resetTokenError) {
+      console.error('⚠️ PasswordResetToken table sync error:', resetTokenError.message);
+    }
   } catch (error) {
     console.error('❌ Database synchronization failed:', error.message);
     console.error('Full error:', error);
@@ -190,6 +199,7 @@ module.exports = {
   Flow,
   Account,
   RealConversation,
+  PasswordResetToken,
   WebhookLog,
   MetaMessage,
   syncDatabase

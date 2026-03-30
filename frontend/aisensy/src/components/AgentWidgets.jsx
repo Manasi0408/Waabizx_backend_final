@@ -2,7 +2,7 @@ import React from "react";
 
 const widgets = [
   {
-    title: "AiSensy Training Call",
+    title: "Waabizx Training Call",
     body: "Schedule your platform onboarding call.",
     gradient: "from-sky-500/90 via-sky-600 to-blue-800",
     icon: (
