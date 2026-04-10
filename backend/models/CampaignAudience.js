@@ -11,7 +11,7 @@ const CampaignAudience = sequelize.define('CampaignAudience', {
     type: DataTypes.INTEGER,
     allowNull: false,
     references: {
-      model: 'Campaigns',
+      model: 'campaigns',
       key: 'id'
     }
   },
@@ -65,7 +65,7 @@ const CampaignAudience = sequelize.define('CampaignAudience', {
   }
 }, {
   timestamps: true,
-  tableName: 'CampaignAudiences'
+  tableName: 'campaignaudiences'
 });
 
 module.exports = CampaignAudience;

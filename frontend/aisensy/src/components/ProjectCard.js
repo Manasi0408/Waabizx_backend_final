@@ -10,7 +10,6 @@ function statusStyles(status) {
 }
 
 function ProjectCard({ project }) {
-  const role = project.owner_role || project.role;
   const status = project.status || "N/A";
   const { dot, pill } = statusStyles(status);
   const created = project.created_at ? new Date(project.created_at).toLocaleDateString(undefined, {
@@ -37,11 +36,6 @@ function ProjectCard({ project }) {
             <h3 className="truncate text-base font-bold tracking-tight text-gray-900 md:text-[17px]">
               {project.project_name}
             </h3>
-            {role && (
-              <span className="shrink-0 rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-800 ring-1 ring-sky-200/80">
-                {role}
-              </span>
-            )}
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">

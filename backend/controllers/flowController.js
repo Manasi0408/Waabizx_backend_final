@@ -1,4 +1,5 @@
 const { Flow } = require("../models");
+const { requireProjectId } = require("../utils/projectScope");
 
 const parseFlowData = (flow) => {
   const raw = flow?.data;
@@ -208,8 +209,10 @@ const runFlow = (flow, { userInput, currentNodeId }) => {
 exports.listFlows = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const rows = await Flow.findAll({
-      where: { userId },
+      where: { userId, projectId },
       attributes: ["id", "name", "createdAt", "updatedAt"],
       order: [["updatedAt", "DESC"]],
     });
@@ -235,6 +238,8 @@ exports.listFlows = async (req, res) => {
 exports.saveFlow = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { name, data } = req.body || {};
 
     const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
@@ -246,6 +251,7 @@ exports.saveFlow = async (req, res) => {
 
     const created = await Flow.create({
       userId,
+      projectId,
       name: String(name).trim(),
       data: JSON.stringify({ nodes, edges }),
     });
@@ -270,13 +276,15 @@ exports.saveFlow = async (req, res) => {
 exports.getFlow = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const flowId = Number(req.params.flowId);
     if (!flowId || Number.isNaN(flowId)) {
       return res.status(400).json({ success: false, message: "Invalid flow id" });
     }
 
     const flow = await Flow.findOne({
-      where: { id: flowId, userId },
+      where: { id: flowId, userId, projectId },
     });
 
     if (!flow) {
@@ -303,13 +311,15 @@ exports.getFlow = async (req, res) => {
 exports.executeFlow = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const flowId = Number(req.params.flowId);
     if (!flowId || Number.isNaN(flowId)) {
       return res.status(400).json({ success: false, message: "Invalid flow id" });
     }
 
     const flowRow = await Flow.findOne({
-      where: { id: flowId, userId },
+      where: { id: flowId, userId, projectId },
     });
 
     if (!flowRow) {

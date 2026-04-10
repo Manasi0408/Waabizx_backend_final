@@ -132,6 +132,16 @@ function Campaigns() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters]);
 
+  // Keep campaign stats (delivered/read) fresh while page is open.
+  useEffect(() => {
+    if (!isAuthenticated()) return undefined;
+    const interval = setInterval(() => {
+      fetchCampaigns();
+    }, 7000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.status, filters.type, filters.page]);
+
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {

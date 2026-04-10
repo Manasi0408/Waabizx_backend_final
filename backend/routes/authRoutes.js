@@ -11,7 +11,8 @@ const {
   getProfile,
   updateProfile,
   listAgents,
-  updateAgent
+  updateAgent,
+  deleteAgent
 } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
 const { authorize } = require('../middleware/roleMiddleware');
@@ -63,5 +64,6 @@ router.get('/profile', protect, getProfile);
 router.put('/profile', protect, updateProfile);
 router.get('/agents', protect, listAgents);
 router.put('/agents/:id', protect, updateAgent);
+router.delete('/agents/:id', protect, deleteAgent);
 
 module.exports = router;

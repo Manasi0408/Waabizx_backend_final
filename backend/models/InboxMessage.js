@@ -11,7 +11,7 @@ const InboxMessage = sequelize.define('InboxMessage', {
     type: DataTypes.INTEGER,
     allowNull: false,
     references: {
-      model: 'Contacts',
+      model: 'contacts',
       key: 'id'
     }
   },
@@ -19,9 +19,14 @@ const InboxMessage = sequelize.define('InboxMessage', {
     type: DataTypes.INTEGER,
     allowNull: false,
     references: {
-      model: 'Users',
+      model: 'users',
       key: 'id'
     }
+  },
+  projectId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: null
   },
   direction: {
     type: DataTypes.ENUM('incoming', 'outgoing'),
@@ -49,7 +54,7 @@ const InboxMessage = sequelize.define('InboxMessage', {
   }
 }, {
   timestamps: true,
-  tableName: 'InboxMessages'
+  tableName: 'inboxmessages'
 });
 
 module.exports = InboxMessage;

@@ -1,10 +1,13 @@
 const { sequelize, Campaign, Contact, Message, User, InboxMessage } = require('../models');
 const { Op } = require('sequelize');
 const { upsertConversationWithQuota, getUsedConversations, ensureAccountExists } = require('../services/conversationBillingService');
+const { requireProjectId } = require('../utils/projectScope');
 
 exports.getDashboardStats = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
 
     // Get time range from query parameter (default to 1 day - Today)
     const daysParam = req.query.days || req.query.range || '1';
@@ -13,12 +16,13 @@ exports.getDashboardStats = async (req, res) => {
     const validDays = [1, 7, 30, 90].includes(days) ? days : 1;
 
     // Total Contacts
-    const totalContacts = await Contact.count({ where: { userId } });
+    const totalContacts = await Contact.count({ where: { userId, projectId } });
 
     // Active Campaigns
     const activeCampaigns = await Campaign.count({ 
       where: { 
         userId,
+        projectId,
         status: 'active'
       }
     });
@@ -30,6 +34,7 @@ exports.getDashboardStats = async (req, res) => {
     const messagesToday = await InboxMessage.count({
       where: {
         userId: userId,
+        projectId,
         direction: 'outgoing',
         timestamp: {
           [Op.gte]: today
@@ -46,12 +51,13 @@ exports.getDashboardStats = async (req, res) => {
       SELECT 
         COUNT(im.id) as total,
         SUM(CASE WHEN im.status IN ('delivered', 'read') THEN 1 ELSE 0 END) as delivered
-      FROM InboxMessages im
+      FROM inboxmessages im
       WHERE im.userId = :userId
+        AND im.projectId = :projectId
         AND im.direction = 'outgoing'
         AND im.timestamp >= :sevenDaysAgo
     `, {
-      replacements: { userId, sevenDaysAgo },
+      replacements: { userId, projectId, sevenDaysAgo },
       type: sequelize.QueryTypes.SELECT
     });
 
@@ -72,13 +78,14 @@ exports.getDashboardStats = async (req, res) => {
         SELECT
           im.timestamp as timestamp,
           im.status as status
-        FROM InboxMessages im
+        FROM inboxmessages im
         WHERE im.userId = :userId
+          AND im.projectId = :projectId
           AND im.direction = 'outgoing'
           AND im.timestamp >= :todayStart
         ORDER BY im.timestamp ASC
       `, {
-        replacements: { userId, todayStart },
+        replacements: { userId, projectId, todayStart },
         type: sequelize.QueryTypes.SELECT
       });
 
@@ -130,14 +137,15 @@ exports.getDashboardStats = async (req, res) => {
           DATE(im.timestamp) as date,
           im.status as status,
           COUNT(im.id) as count
-        FROM InboxMessages im
+        FROM inboxmessages im
         WHERE im.userId = :userId
+          AND im.projectId = :projectId
           AND im.direction = 'outgoing'
           AND im.timestamp >= :daysAgo
         GROUP BY DATE(im.timestamp), im.status
         ORDER BY DATE(im.timestamp) ASC
       `, {
-        replacements: { userId, daysAgo },
+        replacements: { userId, projectId, daysAgo },
         type: sequelize.QueryTypes.SELECT
       });
 
@@ -194,9 +202,9 @@ exports.getDashboardStats = async (req, res) => {
       }
     }
 
-    // Recent activities - Get recent campaigns and messages
+    // Recent activities - Build from real timestamps
     const recentCampaigns = await Campaign.findAll({
-      where: { userId },
+      where: { userId, projectId },
       limit: 3,
       order: [['createdAt', 'DESC']],
       attributes: ['id', 'name', 'totalRecipients', 'createdAt']
@@ -207,7 +215,7 @@ exports.getDashboardStats = async (req, res) => {
       include: [
         {
           model: Campaign,
-          where: { userId },
+          where: { userId, projectId },
           attributes: ['name'],
           required: true
         }
@@ -216,50 +224,66 @@ exports.getDashboardStats = async (req, res) => {
       attributes: ['id', 'sentAt']
     });
 
-    // Format activities
+    // Format activities with sortable timestamp
     const activities = [];
     
     // Add campaign activities
-    recentCampaigns.forEach((campaign, index) => {
+    recentCampaigns.forEach((campaign) => {
       activities.push({
         id: activities.length + 1,
         type: 'campaign',
         message: `Campaign '${campaign.name}' sent to ${campaign.totalRecipients || 0} users`,
         time: formatTimeAgo(campaign.createdAt),
-        icon: '📧'
+        icon: '📧',
+        activityAt: new Date(campaign.createdAt)
       });
     });
 
-    // Add template activities (if any templates exist)
+    // Add template activities using actual template status and latest real timestamp
     const Template = require('../models').Template;
     const recentTemplates = await Template.findAll({
-      where: { userId },
-      limit: 1,
+      where: { userId, projectId },
+      limit: 3,
       order: [['updatedAt', 'DESC']],
-      attributes: ['id', 'name', 'status', 'updatedAt']
+      attributes: ['id', 'name', 'status', 'createdAt', 'updatedAt']
     });
 
     recentTemplates.forEach((template) => {
-      if (template.status === 'approved') {
-        activities.push({
-          id: activities.length + 1,
-          type: 'template',
-          message: `New template '${template.name}' was approved`,
-          time: formatTimeAgo(template.updatedAt),
-          icon: '✅'
-        });
+      const status = String(template.status || '').toLowerCase();
+      const templateEventAt = template.updatedAt || template.createdAt;
+      let message = null;
+      let icon = '📄';
+
+      if (status === 'approved') {
+        message = `Template '${template.name}' was approved`;
+        icon = '✅';
+      } else if (status === 'rejected') {
+        message = `Template '${template.name}' was rejected`;
+        icon = '❌';
+      } else if (status === 'draft') {
+        message = `New template '${template.name}' created`;
+        icon = '📝';
+      } else {
+        message = `Template '${template.name}' status updated`;
       }
+
+      activities.push({
+        id: activities.length + 1,
+        type: 'template',
+        message,
+        time: formatTimeAgo(templateEventAt),
+        icon,
+        activityAt: new Date(templateEventAt)
+      });
     });
 
-    // Sort activities by time (most recent first) and limit to 5
-    activities.sort((a, b) => {
-      // Simple sort - most recent first (you can improve this with actual date comparison)
-      return b.id - a.id;
-    });
+    // Sort activities by actual event time (most recent first), then keep top 5
+    activities.sort((a, b) => new Date(b.activityAt) - new Date(a.activityAt));
+    const topActivities = activities.slice(0, 5).map(({ activityAt, ...rest }) => rest);
 
     // If no activities, add default ones
-    if (activities.length === 0) {
-      activities.push(
+    if (topActivities.length === 0) {
+      topActivities.push(
         {
           id: 1,
           type: 'campaign',
@@ -286,7 +310,7 @@ exports.getDashboardStats = async (req, res) => {
         deliveryRate: `${deliveryRate}%`
       },
       chartData: formattedChartData,
-      activities
+      activities: topActivities
     });
   } catch (error) {
     res.status(500).json({
@@ -302,21 +326,26 @@ exports.getDashboardStats = async (req, res) => {
 // time-series counts (dynamic, not static).
 exports.getAgentActivity = async (req, res) => {
   try {
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const now = new Date();
     const startDate = new Date(now.getFullYear(), now.getMonth() - 11, 1, 0, 0, 0, 0);
 
     const rows = await sequelize.query(`
       SELECT
-        DATE_FORMAT(ac.last_message_time, '%Y-%m') as ym,
-        LOWER(ac.status) as status,
+        DATE_FORMAT(COALESCE(c.last_message_time, c.created_at), '%Y-%m') as ym,
+        LOWER(c.status) as status,
         COUNT(*) as count
-      FROM agent_conversations ac
-      WHERE ac.last_message_time IS NOT NULL
-        AND ac.last_message_time >= :startDate
+      FROM conversations c
+      JOIN users u
+        ON u.id = c.agent_id
+      WHERE COALESCE(c.last_message_time, c.created_at) IS NOT NULL
+        AND u.projectId = :projectId
+        AND COALESCE(c.last_message_time, c.created_at) >= :startDate
       GROUP BY ym, status
       ORDER BY ym ASC
     `, {
-      replacements: { startDate },
+      replacements: { startDate, projectId },
       type: sequelize.QueryTypes.SELECT,
     });
 

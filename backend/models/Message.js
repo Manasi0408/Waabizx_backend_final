@@ -94,7 +94,8 @@ const Message = sequelize.define('Message', {
   //   allowNull: true
   // }
 }, {
-  timestamps: true
+  timestamps: true,
+  tableName: 'messages'
 });
 
 module.exports = Message;

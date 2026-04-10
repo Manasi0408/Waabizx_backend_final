@@ -3,7 +3,7 @@ import MainSidebarNav from "../components/MainSidebarNav";
 
 export default function ReportsComingSoonPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const API_URL = "http://localhost:5000/api";
+  const API_URL = "https://wabizx.techwhizzc.com/api";
 
   const [selectedAgent, setSelectedAgent] = useState(null);
   const user = useMemo(() => {

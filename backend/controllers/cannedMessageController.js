@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { Op } = require('sequelize');
+const { requireProjectId } = require('../utils/projectScope');
 
 const { CannedMessage, User } = require('../models');
 
@@ -39,9 +40,11 @@ const normalizeType = (t) => String(t || '').trim().toUpperCase();
 exports.getCannedMessages = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const search = String(req.query.search || '').trim();
 
-    const where = { userId };
+    const where = { userId, projectId };
     if (search) {
       where[Op.or] = [{ name: { [Op.like]: `%${search}%` } }];
     }
@@ -85,6 +88,8 @@ exports.getCannedMessages = async (req, res) => {
 exports.createCannedMessage = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { name } = req.body;
     const messageType = normalizeType(req.body.messageType);
     const text = req.body.text;
@@ -118,6 +123,7 @@ exports.createCannedMessage = async (req, res) => {
 
     const created = await CannedMessage.create({
       userId,
+      projectId,
       name: String(name).trim(),
       messageType,
       text: messageType === 'TEXT' ? String(text) : null,
@@ -135,12 +141,14 @@ exports.createCannedMessage = async (req, res) => {
 exports.updateCannedMessage = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const messageId = Number(req.params.id);
     const { name } = req.body;
     const messageType = req.body.messageType ? normalizeType(req.body.messageType) : null;
     const text = req.body.text;
 
-    const msg = await CannedMessage.findOne({ where: { id: messageId, userId } });
+    const msg = await CannedMessage.findOne({ where: { id: messageId, userId, projectId } });
     if (!msg) return res.status(404).json({ success: false, message: 'Canned message not found' });
 
     let mediaUrl = msg.mediaUrl;
@@ -186,9 +194,11 @@ exports.updateCannedMessage = async (req, res) => {
 exports.deleteCannedMessage = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const messageId = Number(req.params.id);
 
-    const msg = await CannedMessage.findOne({ where: { id: messageId, userId } });
+    const msg = await CannedMessage.findOne({ where: { id: messageId, userId, projectId } });
     if (!msg) return res.status(404).json({ success: false, message: 'Canned message not found' });
 
     // Best-effort cleanup of uploaded file.
@@ -212,10 +222,12 @@ exports.deleteCannedMessage = async (req, res) => {
 exports.toggleFavorite = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const messageId = Number(req.params.id);
     const { isFavorite } = req.body;
 
-    const msg = await CannedMessage.findOne({ where: { id: messageId, userId } });
+    const msg = await CannedMessage.findOne({ where: { id: messageId, userId, projectId } });
     if (!msg) return res.status(404).json({ success: false, message: 'Canned message not found' });
 
     if (typeof isFavorite === 'boolean') {

@@ -1,6 +1,16 @@
 const jwt = require('jsonwebtoken');
 const { User } = require('../models');
 
+const getProjectIdFromRequest = (req) => {
+  const raw =
+    req.headers['x-project-id'] ??
+    req.headers['x_project_id'] ??
+    req.query?.projectId ??
+    req.body?.projectId;
+  const projectId = Number(raw);
+  return Number.isInteger(projectId) && projectId > 0 ? projectId : null;
+};
+
 exports.protect = async (req, res, next) => {
   try {
     let token;
@@ -69,6 +79,8 @@ exports.protect = async (req, res, next) => {
         error: 'SessionInvalidated'
       });
     }
+
+    req.projectId = getProjectIdFromRequest(req) || req.user.projectId || null;
 
     next();
   } catch (error) {

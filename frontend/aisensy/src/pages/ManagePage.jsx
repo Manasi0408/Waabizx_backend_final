@@ -54,6 +54,8 @@ function ManagePage() {
   const [loadingAgents, setLoadingAgents] = useState(false);
   const [agentsError, setAgentsError] = useState("");
   const [roleUpdatingId, setRoleUpdatingId] = useState(null);
+  const [statusUpdatingId, setStatusUpdatingId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
   const [roleToast, setRoleToast] = useState("");
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -63,6 +65,7 @@ function ManagePage() {
     name: "",
     email: "",
     password: "",
+    role: "",
   });
 
   const [editOpen, setEditOpen] = useState(false);
@@ -135,8 +138,13 @@ function ManagePage() {
     const name = String(createForm.name || "").trim();
     const email = String(createForm.email || "").trim();
     const password = String(createForm.password || "").trim();
-    if (!name || !email || !password) {
-      setCreateError("Name, email and password are required.");
+    const role = String(createForm.role || "").trim().toLowerCase();
+    if (!name || !email || !password || !role) {
+      setCreateError("Name, email, password and role are required.");
+      return;
+    }
+    if (!["agent", "admin"].includes(role)) {
+      setCreateError("Role must be agent or admin.");
       return;
     }
 
@@ -146,15 +154,58 @@ function ManagePage() {
         name,
         email,
         password,
-        role: "agent",
+        role,
       });
       setCreateOpen(false);
-      setCreateForm({ name: "", email: "", password: "" });
+      setCreateForm({ name: "", email: "", password: "", role: "" });
       await fetchAgents();
     } catch (e) {
       setCreateError(e?.response?.data?.message || e?.message || "Failed to create agent");
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleStatusChange = async (agent, nextStatusRaw) => {
+    const agentId = agent?.id;
+    const nextStatus = String(nextStatusRaw || "").toLowerCase().trim();
+    const currentStatus = String(agent?.status || "active").toLowerCase().trim();
+    if (!agentId) return;
+    if (!["active", "inactive"].includes(nextStatus)) return;
+    if (nextStatus === currentStatus) return;
+
+    try {
+      setStatusUpdatingId(agentId);
+      setRoleToast("");
+      setAgentsError("");
+      await axios.put(`/auth/agents/${agentId}`, { status: nextStatus });
+      await fetchAgents();
+      setRoleToast(`Status updated for ${agent?.name || "agent"}.`);
+      setTimeout(() => setRoleToast(""), 3500);
+    } catch (e) {
+      setAgentsError(e?.response?.data?.message || e?.message || "Failed to update status");
+    } finally {
+      setStatusUpdatingId(null);
+    }
+  };
+
+  const handleDeleteAgent = async (agent) => {
+    const agentId = agent?.id;
+    if (!agentId) return;
+    const ok = window.confirm(`Delete ${agent?.name || "this agent"}?`);
+    if (!ok) return;
+
+    try {
+      setDeletingId(agentId);
+      setAgentsError("");
+      await axios.delete(`/auth/agents/${agentId}`);
+      await fetchAgents();
+      setRoleToast(`Deleted ${agent?.name || "agent"} successfully.`);
+      setTimeout(() => setRoleToast(""), 3500);
+    } catch (e) {
+      setAgentsError(e?.response?.data?.message || e?.message || "Failed to delete agent");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -333,26 +384,32 @@ function ManagePage() {
                           const email = a?.email || "";
                           const initial = String(name).trim().charAt(0).toUpperCase();
                           const status = (a?.status || "active").toString().toLowerCase();
-                          const statusLabel = status === "active" ? "Active" : status;
                           const isActiveStatus = status === "active";
+                          const canOpenAgentWorkspace = isActiveStatus && currentRole !== "admin";
                           const avatarGrad = agentAvatarGradient(a.id);
                           return (
                             <div
                               key={a.id}
                               role="button"
-                              tabIndex={0}
+                              tabIndex={canOpenAgentWorkspace ? 0 : -1}
                               onClick={() => {
-                                navigate("/agent-dashboard", {
+                                if (!canOpenAgentWorkspace) return;
+                                navigate("/agent", {
                                   state: selectedProject ? { project: selectedProject, agent: a } : { agent: a },
                                 });
                               }}
                               onKeyDown={(e) => {
+                                if (!canOpenAgentWorkspace) return;
                                 if (e.key !== "Enter") return;
-                                navigate("/agent-dashboard", {
+                                navigate("/agent", {
                                   state: selectedProject ? { project: selectedProject, agent: a } : { agent: a },
                                 });
                               }}
-                              className="group relative motion-card-rich overflow-hidden rounded-2xl border border-gray-200/80 bg-white/95 backdrop-blur-md cursor-pointer motion-hover-lift shadow-lg shadow-gray-200/40 ring-1 ring-gray-100/80 transition-all duration-300 hover:border-sky-300/60 hover:shadow-2xl hover:shadow-sky-500/15 hover:-translate-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-sky-50/50"
+                              className={`group relative motion-card-rich overflow-hidden rounded-2xl border border-gray-200/80 backdrop-blur-md shadow-lg shadow-gray-200/40 ring-1 ring-gray-100/80 transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-sky-50/50 ${
+                                canOpenAgentWorkspace
+                                  ? "bg-white/95 cursor-pointer motion-hover-lift hover:border-sky-300/60 hover:shadow-2xl hover:shadow-sky-500/15 hover:-translate-y-1"
+                                  : "bg-gray-100/70 cursor-not-allowed opacity-75"
+                              }`}
                             >
                               <div
                                 className="pointer-events-none absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-sky-400 via-blue-500 to-cyan-400 z-[5]"
@@ -394,7 +451,7 @@ function ManagePage() {
                                         </h3>
                                         <select
                                           value={String(a?.role || "agent").toLowerCase()}
-                                          disabled={roleUpdatingId === a.id}
+                                          disabled={roleUpdatingId === a.id || deletingId === a.id}
                                           onClick={(e) => e.stopPropagation()}
                                           onChange={(e) => {
                                             e.stopPropagation();
@@ -408,29 +465,50 @@ function ManagePage() {
                                         </select>
                                       </div>
                                       <p className="mt-1 truncate text-sm text-gray-500 transition-colors group-hover:text-gray-600">{email}</p>
+                                      <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-sky-700">
+                                        {String(a?.role || "agent").toLowerCase() === "admin" ? "Admin" : "Agent"}
+                                      </p>
                                     </div>
                                   </div>
-                                  <button
-                                    className="group/edit shrink-0 rounded-xl border border-gray-100 bg-white/80 p-2.5 text-gray-400 shadow-sm transition-all duration-200 hover:border-sky-200 hover:bg-sky-50 hover:text-sky-600 hover:shadow-md active:scale-95"
-                                    title="Edit"
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setEditAgent(a);
-                                      setEditForm({ name: a?.name || "", email: a?.email || "" });
-                                      setEditError("");
-                                      setEditOpen(true);
-                                    }}
-                                  >
-                                    <svg
-                                      className="h-4 w-4 transition-transform duration-300 group-hover/edit:scale-110 group-hover/edit:-rotate-6"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      viewBox="0 0 24 24"
+                                  <div className="flex shrink-0 items-center gap-2">
+                                    <button
+                                      className="group/edit rounded-xl border border-gray-100 bg-white/80 p-2.5 text-gray-400 shadow-sm transition-all duration-200 hover:border-sky-200 hover:bg-sky-50 hover:text-sky-600 hover:shadow-md active:scale-95"
+                                      title="Edit"
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setEditAgent(a);
+                                        setEditForm({ name: a?.name || "", email: a?.email || "" });
+                                        setEditError("");
+                                        setEditOpen(true);
+                                      }}
                                     >
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                    </svg>
-                                  </button>
+                                      <svg
+                                        className="h-4 w-4 transition-transform duration-300 group-hover/edit:scale-110 group-hover/edit:-rotate-6"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                      >
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                      </svg>
+                                    </button>
+                                    {currentRole === "admin" && (
+                                      <button
+                                        className="rounded-xl border border-red-100 bg-white/80 p-2.5 text-red-400 shadow-sm transition-all duration-200 hover:border-red-200 hover:bg-red-50 hover:text-red-600 hover:shadow-md active:scale-95 disabled:opacity-60"
+                                        title="Delete"
+                                        type="button"
+                                        disabled={deletingId === a.id}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleDeleteAgent(a);
+                                        }}
+                                      >
+                                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7h6m-7 0h8m-1-2a1 1 0 00-1-1h-2a1 1 0 00-1 1l-.2 1h4.4l-.2-1z" />
+                                        </svg>
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
 
                                 <div className="mt-5 grid grid-cols-2 gap-3">
@@ -441,28 +519,37 @@ function ManagePage() {
                                   <div className="rounded-xl border border-gray-100/90 bg-gradient-to-br from-gray-50/90 to-white px-3 py-2.5 shadow-sm transition-all duration-300 group-hover:border-sky-200/60 group-hover:shadow-md">
                                     <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Status</div>
                                     <div className="mt-1.5">
-                                      <span
-                                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ring-1 ${
+                                      <select
+                                        value={isActiveStatus ? "active" : "inactive"}
+                                        disabled={statusUpdatingId === a.id || deletingId === a.id}
+                                        onClick={(e) => e.stopPropagation()}
+                                        onChange={(e) => {
+                                          e.stopPropagation();
+                                          handleStatusChange(a, e.target.value);
+                                        }}
+                                        className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ring-1 focus:outline-none focus:ring-2 focus:ring-sky-400/45 ${
                                           isActiveStatus
                                             ? "bg-emerald-50 text-emerald-800 ring-emerald-200/90"
                                             : "bg-gray-100 text-gray-600 ring-gray-200/80"
                                         }`}
                                       >
-                                        <span
-                                          className={`h-1.5 w-1.5 rounded-full ${isActiveStatus ? "animate-pulse bg-emerald-500" : "bg-gray-400"}`}
-                                        />
-                                        {statusLabel}
-                                      </span>
+                                        <option value="active">Active</option>
+                                        <option value="inactive">Not Active</option>
+                                      </select>
                                     </div>
                                   </div>
                                 </div>
 
                                 <div className="mt-4 flex items-center justify-between border-t border-gray-100/80 pt-4 text-xs">
                                   <span className="font-medium text-gray-400 transition-colors group-hover:text-sky-600/80">
-                                    Open agent workspace
+                                    {!isActiveStatus
+                                      ? "Not active - cannot open"
+                                      : currentRole === "admin"
+                                      ? "Admin cannot open agent workspace"
+                                      : "Open agent workspace"}
                                   </span>
                                   <span className="flex items-center gap-1 font-semibold text-sky-600 opacity-70 transition-all duration-300 group-hover:translate-x-0.5 group-hover:opacity-100">
-                                    Continue
+                                    {canOpenAgentWorkspace ? "Continue" : "Locked"}
                                     <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                                     </svg>
@@ -534,6 +621,19 @@ function ManagePage() {
                     placeholder="agent@example.com"
                     disabled={creating}
                   />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-800 mb-2">Role</label>
+                  <select
+                    value={createForm.role}
+                    onChange={(e) => setCreateForm((p) => ({ ...p, role: e.target.value }))}
+                    className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400/45 focus:border-sky-400 bg-gray-50/80 hover:bg-white transition-all"
+                    disabled={creating}
+                  >
+                    <option value="">Select role</option>
+                    <option value="agent">Agent</option>
+                    <option value="admin">Admin</option>
+                  </select>
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-800 mb-2">Password</label>

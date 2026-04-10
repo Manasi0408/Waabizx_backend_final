@@ -1,5 +1,5 @@
-const API = "http://localhost:5000/api/chat";
-const API_BASE = "http://localhost:5000/api";
+const API = "https://wabizx.techwhizzc.com/api/chat";
+const API_BASE = "https://wabizx.techwhizzc.com/api";
 
 const getAuthHeaders = () => {
   const token = localStorage.getItem("token");

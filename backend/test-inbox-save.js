@@ -11,7 +11,7 @@ async function testInboxSave() {
     console.log('🔍 Testing InboxMessage save functionality...\n');
 
     // 1. Check if table exists
-    console.log('1️⃣  Checking if InboxMessages table exists...');
+    console.log('1️⃣  Checking if inboxmessages table exists...');
     try {
       await InboxMessage.sync({ alter: false });
       console.log('✅ Table exists or was created\n');
@@ -52,7 +52,7 @@ async function testInboxSave() {
     }
 
     // 4. Try to save a test message
-    console.log('4️⃣  Attempting to save test message to InboxMessages...');
+    console.log('4️⃣  Attempting to save test message to inboxmessages...');
     const testMessage = await InboxMessage.create({
       contactId: testContact.id,
       userId: testUser.id,
@@ -97,10 +97,10 @@ async function testInboxSave() {
     console.error('Error Stack:', error.stack);
     
     if (error.message.includes("doesn't exist") || error.message.includes("Unknown table")) {
-      console.error('\n⚠️  SOLUTION: The InboxMessages table doesn\'t exist.');
+      console.error('\n⚠️  SOLUTION: The inboxmessages table doesn\'t exist.');
       console.error('   Run this SQL in your database:');
       console.error(`
-CREATE TABLE IF NOT EXISTS \`InboxMessages\` (
+CREATE TABLE IF NOT EXISTS \`inboxmessages\` (
   \`id\` INT NOT NULL AUTO_INCREMENT,
   \`contactId\` INT NOT NULL,
   \`userId\` INT NOT NULL,
@@ -115,8 +115,8 @@ CREATE TABLE IF NOT EXISTS \`InboxMessages\` (
   PRIMARY KEY (\`id\`),
   INDEX \`contactId\` (\`contactId\`),
   INDEX \`userId\` (\`userId\`),
-  CONSTRAINT \`InboxMessages_ibfk_1\` FOREIGN KEY (\`contactId\`) REFERENCES \`Contacts\` (\`id\`) ON DELETE CASCADE,
-  CONSTRAINT \`InboxMessages_ibfk_2\` FOREIGN KEY (\`userId\`) REFERENCES \`Users\` (\`id\`) ON DELETE CASCADE
+  CONSTRAINT \`inboxmessages_ibfk_1\` FOREIGN KEY (\`contactId\`) REFERENCES \`contacts\` (\`id\`) ON DELETE CASCADE,
+  CONSTRAINT \`inboxmessages_ibfk_2\` FOREIGN KEY (\`userId\`) REFERENCES \`users\` (\`id\`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
       `);
     }

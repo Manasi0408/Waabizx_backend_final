@@ -2407,29 +2407,29 @@ function Inbox() {
                                 <div className="mb-2">
                                   {message.mediaType === 'image' && (
                                     <img 
-                                      src={`http://localhost:5000${message.mediaUrl}`} 
+                                      src={`https://wabizx.techwhizzc.com/${message.mediaUrl}`} 
                                       alt="Message media" 
                                       className="max-w-full rounded-lg cursor-pointer"
-                                      onClick={() => window.open(`http://localhost:5000${message.mediaUrl}`, '_blank')}
+                                      onClick={() => window.open(`https://wabizx.techwhizzc.com/${message.mediaUrl}`, '_blank')}
                                     />
                                   )}
                                   {message.mediaType === 'video' && (
                                     <video 
-                                      src={`http://localhost:5000${message.mediaUrl}`} 
+                                      src={`https://wabizx.techwhizzc.com/${message.mediaUrl}`} 
                                       controls 
                                       className="max-w-full rounded-lg"
                                     />
                                   )}
                                   {message.mediaType === 'audio' && (
                                     <audio 
-                                      src={`http://localhost:5000${message.mediaUrl}`} 
+                                      src={`https://wabizx.techwhizzc.com/${message.mediaUrl}`} 
                                       controls 
                                       className="w-full"
                                     />
                                   )}
                                   {message.mediaType === 'document' && (
                                     <a 
-                                      href={`http://localhost:5000${message.mediaUrl}`} 
+                                      href={`https://wabizx.techwhizzc.com/${message.mediaUrl}`} 
                                       download
                                       className="flex items-center gap-2 p-2 bg-gray-100 rounded"
                                     >

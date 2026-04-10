@@ -65,9 +65,15 @@ const Template = sequelize.define('Template', {
   userId: {
     type: DataTypes.INTEGER,
     allowNull: false
+  },
+  projectId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: null
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  tableName: 'templates'
 });
 
 module.exports = Template;

@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const multer = require('multer');
 const csv = require('csv-parser');
 const { Readable } = require('stream');
+const { requireProjectId } = require('../utils/projectScope');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -19,25 +20,38 @@ const upload = multer({
 exports.createContact = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { phone, name, email, tags, country } = req.body;
+    const normalizedPhone = String(phone || '').trim().replace(/\D/g, '');
+
+    if (!normalizedPhone || normalizedPhone.length < 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter a valid phone number'
+      });
+    }
 
     const contactExists = await Contact.findOne({
       where: {
-        phone,
-        userId
+        phone: normalizedPhone,
+        userId,
+        projectId
       }
     });
 
     if (contactExists) {
-      return res.status(400).json({
-        success: false,
-        message: 'Contact with this phone number already exists'
+      return res.status(200).json({
+        success: true,
+        contact: contactExists,
+        message: 'Contact already exists'
       });
     }
 
     const contact = await Contact.create({
       userId,
-      phone,
+      projectId,
+      phone: normalizedPhone,
       name,
       email,
       tags: tags || [],
@@ -49,6 +63,19 @@ exports.createContact = async (req, res) => {
       contact
     });
   } catch (error) {
+    // Normalize duplicate key / unique constraint errors into a 400.
+    // MySQL: ER_DUP_ENTRY, Sequelize: SequelizeUniqueConstraintError
+    const isDuplicate =
+      error?.name === 'SequelizeUniqueConstraintError' ||
+      error?.original?.code === 'ER_DUP_ENTRY' ||
+      /duplicate entry/i.test(String(error?.message || ''));
+    if (isDuplicate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Contact with this phone number already exists for this account'
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: 'Server error',
@@ -60,9 +87,11 @@ exports.createContact = async (req, res) => {
 exports.getContacts = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { status, type, search, page = 1, limit = 20 } = req.query;
 
-    const where = { userId };
+    const where = { userId, projectId };
     if (status) where.status = status;
     if (type === 'opted_in') where.whatsappOptInAt = { [Op.not]: null };
     if (type === 'not_opted_in') where.whatsappOptInAt = { [Op.is]: null };
@@ -106,12 +135,15 @@ exports.getContacts = async (req, res) => {
 exports.getContactById = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const contactId = req.params.id;
 
     const contact = await Contact.findOne({
       where: {
         id: contactId,
-        userId
+        userId,
+        projectId
       }
     });
 
@@ -138,6 +170,8 @@ exports.getContactById = async (req, res) => {
 exports.importContacts = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const contactsData = req.body.contacts;
 
     if (!Array.isArray(contactsData) || contactsData.length === 0) {
@@ -154,9 +188,30 @@ exports.importContacts = async (req, res) => {
       try {
         const { phone, name, email, tags, country, customFields, ...rest } = contactData;
         const custom = customFields && typeof customFields === 'object' ? customFields : (Object.keys(rest).length ? rest : {});
+        const normalizedPhone = String(phone || contactData.phone || '').trim().replace(/\D/g, '');
+        if (!normalizedPhone || normalizedPhone.length < 10) {
+          errors.push({
+            phone: contactData.phone,
+            error: 'Invalid phone number'
+          });
+          continue;
+        }
+        // Pre-check duplicate per user.
+        const existing = normalizedPhone
+          ? await Contact.findOne({ where: { phone: normalizedPhone, userId, projectId } })
+          : null;
+        if (existing) {
+          errors.push({
+            phone: normalizedPhone,
+            error: 'Contact with this phone number already exists for this account'
+          });
+          continue;
+        }
+
         const contact = await Contact.create({
           userId,
-          phone: phone || contactData.phone,
+          projectId,
+          phone: normalizedPhone,
           name: name || contactData.name || '',
           email: email || contactData.email || null,
           tags: tags || contactData.tags || [],
@@ -165,6 +220,17 @@ exports.importContacts = async (req, res) => {
         });
         createdContacts.push(contact);
       } catch (error) {
+        const isDuplicate =
+          error?.name === 'SequelizeUniqueConstraintError' ||
+          error?.original?.code === 'ER_DUP_ENTRY' ||
+          /duplicate entry/i.test(String(error?.message || ''));
+        if (isDuplicate) {
+          errors.push({
+            phone: contactData.phone,
+            error: 'Contact with this phone number already exists for this account'
+          });
+          continue;
+        }
         errors.push({
           phone: contactData.phone,
           error: error.message
@@ -198,6 +264,8 @@ exports.parseAndSaveContactsCSV = async (req, res) => {
       });
     }
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const results = [];
     const stream = Readable.from(req.file.buffer.toString('utf8'));
     let detectedHeaders = [];
@@ -246,9 +314,10 @@ exports.parseAndSaveContactsCSV = async (req, res) => {
     for (const row of results) {
       try {
         const [contact, createdFlag] = await Contact.findOrCreate({
-          where: { userId, phone: row.phone },
+          where: { userId, projectId, phone: row.phone },
           defaults: {
             userId,
+            projectId,
             phone: row.phone,
             name: row.name,
             customFields: row.customFields || {}
@@ -289,13 +358,16 @@ exports.parseAndSaveContactsCSV = async (req, res) => {
 exports.updateContact = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const contactId = req.params.id;
     const updates = req.body;
 
     const contact = await Contact.findOne({
       where: {
         id: contactId,
-        userId
+        userId,
+        projectId
       }
     });
 
@@ -324,12 +396,15 @@ exports.updateContact = async (req, res) => {
 exports.optOutContact = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const contactId = req.params.id;
 
     const contact = await Contact.findOne({
       where: {
         id: contactId,
-        userId
+        userId,
+        projectId
       }
     });
 
@@ -364,12 +439,15 @@ exports.optOutContact = async (req, res) => {
 exports.optInContact = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const contactId = req.params.id;
 
     const contact = await Contact.findOne({
       where: {
         id: contactId,
-        userId
+        userId,
+        projectId
       }
     });
 
@@ -403,12 +481,15 @@ exports.optInContact = async (req, res) => {
 exports.deleteContact = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const contactId = req.params.id;
 
     const contact = await Contact.findOne({
       where: {
         id: contactId,
-        userId
+        userId,
+        projectId
       }
     });
 

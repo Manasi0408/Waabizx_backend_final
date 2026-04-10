@@ -1,9 +1,22 @@
 const axios = require('axios');
 const { Campaign, CampaignAudience, Contact, InboxMessage, Template } = require('../models');
 const { Op } = require('sequelize');
+const { requireProjectId } = require('../utils/projectScope');
 
 // Store active campaign processors
 const activeProcessors = new Map();
+
+async function calculateCampaignAudienceStats(campaignId) {
+  const [total, sent, delivered, read, failed] = await Promise.all([
+    CampaignAudience.count({ where: { campaignId } }),
+    CampaignAudience.count({ where: { campaignId, status: { [Op.in]: ['sent', 'delivered', 'read'] } } }),
+    CampaignAudience.count({ where: { campaignId, status: { [Op.in]: ['delivered', 'read'] } } }),
+    CampaignAudience.count({ where: { campaignId, status: 'read' } }),
+    CampaignAudience.count({ where: { campaignId, status: 'failed' } })
+  ]);
+
+  return { total, sent, delivered, read, failed };
+}
 
 // Map contact field to value (name, phone, or customFields[key])
 function getContactVarValue(contact, key) {
@@ -30,6 +43,8 @@ function buildAudienceVars(contact, variable_mapping) {
 exports.createCampaign = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { name, template_name, template_language = "en_US", schedule_time, audience, variable_mapping, contactIds } = req.body;
 
     if (!name || !template_name) {
@@ -46,7 +61,7 @@ exports.createCampaign = async (req, res) => {
     if (contactIds && Array.isArray(contactIds) && contactIds.length > 0 && variable_mapping) {
       status = 'PENDING';
       const contacts = await Contact.findAll({
-        where: { id: contactIds, userId },
+        where: { id: contactIds, userId, projectId },
         attributes: ['id', 'phone', 'name', 'customFields']
       });
       total = contacts.length;
@@ -57,6 +72,7 @@ exports.createCampaign = async (req, res) => {
 
     const campaign = await Campaign.create({
       userId,
+      projectId,
       name,
       template_name,
       template_language,
@@ -69,7 +85,7 @@ exports.createCampaign = async (req, res) => {
 
     if (contactIds && Array.isArray(contactIds) && contactIds.length > 0 && variable_mapping) {
       const contacts = await Contact.findAll({
-        where: { id: contactIds, userId },
+        where: { id: contactIds, userId, projectId },
         attributes: ['id', 'phone', 'name', 'customFields']
       });
       const audienceRecords = contacts.map(c => {
@@ -116,6 +132,8 @@ exports.createCampaign = async (req, res) => {
 exports.addContactsToCampaign = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const campaignId = req.params.id;
     const { contactIds, variable_mapping } = req.body;
 
@@ -127,7 +145,7 @@ exports.addContactsToCampaign = async (req, res) => {
     }
 
     const campaign = await Campaign.findOne({
-      where: { id: campaignId, userId }
+      where: { id: campaignId, userId, projectId }
     });
     if (!campaign) {
       return res.status(404).json({ success: false, message: 'Campaign not found' });
@@ -142,7 +160,7 @@ exports.addContactsToCampaign = async (req, res) => {
     await campaign.update({ variable_mapping });
 
     const contacts = await Contact.findAll({
-      where: { id: contactIds, userId },
+      where: { id: contactIds, userId, projectId },
       attributes: ['id', 'phone', 'name', 'customFields']
     });
 
@@ -186,10 +204,11 @@ exports.addContactsToCampaign = async (req, res) => {
 exports.getCampaigns = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { sequelize } = require('../models');
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { status, type, page = 1, limit = 10 } = req.query;
 
-    const where = { userId };
+    const where = { userId, projectId };
     if (status) where.status = status;
     if (type) where.type = type;
 
@@ -209,31 +228,15 @@ exports.getCampaigns = async (req, res) => {
     const campaignsWithStats = await Promise.all(
       campaigns.map(async (campaign) => {
         try {
-          // Get stats from CampaignAudience table
-          const stats = await CampaignAudience.findAll({
-            where: { campaignId: campaign.id },
-            attributes: [
-              [sequelize.fn('COUNT', sequelize.col('CampaignAudience.id')), 'total'],
-              // AiSensy-style funnel:
-              // sent includes sent/delivered/read
-              // delivered includes delivered/read
-              [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status IN ('sent','delivered','read') THEN 1 ELSE 0 END")), 'sent'],
-              [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status IN ('delivered','read') THEN 1 ELSE 0 END")), 'delivered'],
-              [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'read' THEN 1 ELSE 0 END")), 'read'],
-              [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'failed' THEN 1 ELSE 0 END")), 'failed']
-            ],
-            raw: true
-          });
-
-          const stat = stats && stats.length > 0 ? stats[0] : null;
+          const stat = await calculateCampaignAudienceStats(campaign.id);
           
           // Use dynamic stats if available, otherwise fallback to campaign table values
           const campaignData = campaign.toJSON();
-          campaignData.sent = stat ? parseInt(stat.sent) || 0 : (campaign.sent || 0);
-          campaignData.delivered = stat ? parseInt(stat.delivered) || 0 : (campaign.delivered || 0);
-          campaignData.read = stat ? parseInt(stat.read) || 0 : (campaign.read || 0);
-          campaignData.failed = stat ? parseInt(stat.failed) || 0 : (campaign.failed || 0);
-          campaignData.total = stat ? parseInt(stat.total) || 0 : (campaign.total || 0);
+          campaignData.sent = stat ? parseInt(stat.sent, 10) || 0 : (campaign.sent || 0);
+          campaignData.delivered = stat ? parseInt(stat.delivered, 10) || 0 : (campaign.delivered || 0);
+          campaignData.read = stat ? parseInt(stat.read, 10) || 0 : (campaign.read || 0);
+          campaignData.failed = stat ? parseInt(stat.failed, 10) || 0 : (campaign.failed || 0);
+          campaignData.total = stat ? parseInt(stat.total, 10) || 0 : (campaign.total || 0);
 
           return campaignData;
         } catch (statError) {
@@ -268,13 +271,15 @@ exports.getCampaigns = async (req, res) => {
 exports.getCampaignById = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const campaignId = req.params.id;
-    const { sequelize } = require('../models');
 
     const campaign = await Campaign.findOne({
       where: {
         id: campaignId,
-        userId
+        userId,
+        projectId
       }
     });
 
@@ -295,28 +300,14 @@ exports.getCampaignById = async (req, res) => {
     };
 
     try {
-      const audienceStats = await CampaignAudience.findAll({
-        where: { campaignId },
-        attributes: [
-          [sequelize.fn('COUNT', sequelize.col('CampaignAudience.id')), 'total'],
-          [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status IN ('sent','delivered','read') THEN 1 ELSE 0 END")), 'sent'],
-          [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status IN ('delivered','read') THEN 1 ELSE 0 END")), 'delivered'],
-          [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'read' THEN 1 ELSE 0 END")), 'read'],
-          [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'failed' THEN 1 ELSE 0 END")), 'failed']
-        ],
-        raw: true
-      });
-
-      if (audienceStats && audienceStats.length > 0) {
-        const stat = audienceStats[0];
-        stats = {
-          total: parseInt(stat.total) || 0,
-          sent: parseInt(stat.sent) || 0,
-          delivered: parseInt(stat.delivered) || 0,
-          read: parseInt(stat.read) || 0,
-          failed: parseInt(stat.failed) || 0
-        };
-      }
+      const stat = await calculateCampaignAudienceStats(campaignId);
+      stats = {
+        total: parseInt(stat.total, 10) || 0,
+        sent: parseInt(stat.sent, 10) || 0,
+        delivered: parseInt(stat.delivered, 10) || 0,
+        read: parseInt(stat.read, 10) || 0,
+        failed: parseInt(stat.failed, 10) || 0
+      };
     } catch (statError) {
       console.error(`Error calculating stats for campaign ${campaignId}:`, statError);
       // Use campaign table values as fallback
@@ -346,12 +337,15 @@ exports.getCampaignById = async (req, res) => {
 exports.startCampaign = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const campaignId = req.params.id;
 
     const campaign = await Campaign.findOne({
       where: {
         id: campaignId,
-        userId
+        userId,
+        projectId
       }
     });
 
@@ -441,7 +435,7 @@ exports.startCampaign = async (req, res) => {
     await campaign.save();
 
     // Start processing in background (don't await)
-    processCampaign(campaignId, userId).catch(err => {
+    processCampaign(campaignId, userId, projectId).catch(err => {
       console.error('Error processing campaign:', err);
     });
 
@@ -465,12 +459,15 @@ exports.startCampaign = async (req, res) => {
 exports.pauseCampaign = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const campaignId = req.params.id;
 
     const campaign = await Campaign.findOne({
       where: {
         id: campaignId,
-        userId
+        userId,
+        projectId
       }
     });
 
@@ -517,12 +514,15 @@ exports.pauseCampaign = async (req, res) => {
 exports.resumeCampaign = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const campaignId = req.params.id;
 
     const campaign = await Campaign.findOne({
       where: {
         id: campaignId,
-        userId
+        userId,
+        projectId
       }
     });
 
@@ -545,7 +545,7 @@ exports.resumeCampaign = async (req, res) => {
     await campaign.save();
 
     // Resume processing in background
-    processCampaign(campaignId, userId).catch(err => {
+    processCampaign(campaignId, userId, projectId).catch(err => {
       console.error('Error resuming campaign:', err);
     });
 
@@ -569,12 +569,15 @@ exports.resumeCampaign = async (req, res) => {
 exports.getCampaignAudience = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const campaignId = req.params.id;
 
     const campaign = await Campaign.findOne({
       where: {
         id: campaignId,
-        userId
+        userId,
+        projectId
       }
     });
 
@@ -612,7 +615,9 @@ exports.updateCampaign = async (req, res) => {
     const campaignId = req.params.id;
     const { name, template_name, template_language, schedule_time, status } = req.body;
 
-    const campaign = await Campaign.findOne({ where: { id: campaignId, userId } });
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
+    const campaign = await Campaign.findOne({ where: { id: campaignId, userId, projectId } });
     if (!campaign) {
       return res.status(404).json({ success: false, message: 'Campaign not found' });
     }
@@ -663,7 +668,9 @@ exports.deleteCampaign = async (req, res) => {
     const userId = req.user.id;
     const campaignId = req.params.id;
 
-    const campaign = await Campaign.findOne({ where: { id: campaignId, userId } });
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
+    const campaign = await Campaign.findOne({ where: { id: campaignId, userId, projectId } });
     if (!campaign) {
       return res.status(404).json({ success: false, message: 'Campaign not found' });
     }
@@ -674,7 +681,7 @@ exports.deleteCampaign = async (req, res) => {
 
     // Clean up audiences first (safe even if FK cascade not enforced)
     await CampaignAudience.destroy({ where: { campaignId } });
-    await Campaign.destroy({ where: { id: campaignId, userId } });
+    await Campaign.destroy({ where: { id: campaignId, userId, projectId } });
 
     return res.json({ success: true, message: 'Campaign deleted successfully' });
   } catch (error) {
@@ -688,7 +695,7 @@ exports.deleteCampaign = async (req, res) => {
 };
 
 // Process Campaign - Core Brain (Batch sending logic)
-async function processCampaign(campaignId, userId) {
+async function processCampaign(campaignId, userId, projectId) {
   try {
     const campaign = await Campaign.findByPk(campaignId);
     if (!campaign || campaign.status !== 'PROCESSING') {
@@ -729,7 +736,7 @@ async function processCampaign(campaignId, userId) {
     let templatePlaceholderInfoAvailable = false;
     try {
       const tpl = await Template.findOne({
-        where: { userId, name: normalizedTemplateNameForLookup },
+        where: { userId, projectId, name: normalizedTemplateNameForLookup },
         attributes: ['id', 'name', 'content', 'status']
       });
       if (tpl) {
@@ -888,10 +895,11 @@ async function processCampaign(campaignId, userId) {
           await audienceMember.save();
 
           // Find or create contact
-          let contact = await Contact.findOne({ where: { phone: audienceMember.phone, userId } });
+          let contact = await Contact.findOne({ where: { phone: audienceMember.phone, userId, projectId } });
           if (!contact) {
             contact = await Contact.create({
               userId,
+              projectId,
               phone: audienceMember.phone,
               name: audienceMember.phone,
               status: 'active'
@@ -903,6 +911,7 @@ async function processCampaign(campaignId, userId) {
             await InboxMessage.create({
               contactId: contact.id,
               userId,
+              projectId,
               direction: "outgoing",
               message: `Template: ${campaign.template_name}`,
               type: "text",
@@ -973,29 +982,14 @@ async function processCampaign(campaignId, userId) {
 // Update campaign stats from audience
 async function updateCampaignStats(campaignId) {
   try {
-    const { sequelize } = require('../models');
-    
-    const stats = await CampaignAudience.findAll({
-      where: { campaignId },
-      attributes: [
-        [sequelize.fn('COUNT', sequelize.col('CampaignAudience.id')), 'total'],
-        [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status IN ('sent','delivered','read') THEN 1 ELSE 0 END")), 'sent'],
-        [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status IN ('delivered','read') THEN 1 ELSE 0 END")), 'delivered'],
-        [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'read' THEN 1 ELSE 0 END")), 'read'],
-        [sequelize.fn('SUM', sequelize.literal("CASE WHEN CampaignAudience.status = 'failed' THEN 1 ELSE 0 END")), 'failed']
-      ],
-      raw: true
-    });
-
-    if (stats && stats.length > 0) {
-      const stat = stats[0];
-      await Campaign.update({
-        sent: parseInt(stat.sent) || 0,
-        delivered: parseInt(stat.delivered) || 0,
-        read: parseInt(stat.read) || 0,
-        failed: parseInt(stat.failed) || 0
-      }, { where: { id: campaignId } });
-    }
+    const stat = await calculateCampaignAudienceStats(campaignId);
+    await Campaign.update({
+      total: parseInt(stat.total, 10) || 0,
+      sent: parseInt(stat.sent, 10) || 0,
+      delivered: parseInt(stat.delivered, 10) || 0,
+      read: parseInt(stat.read, 10) || 0,
+      failed: parseInt(stat.failed, 10) || 0
+    }, { where: { id: campaignId } });
   } catch (error) {
     console.error('Error updating campaign stats:', error);
     // Fallback: count manually

@@ -90,9 +90,15 @@ const Campaign = sequelize.define('Campaign', {
   userId: {
     type: DataTypes.INTEGER,
     allowNull: false
+  },
+  projectId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: null
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  tableName: 'campaigns'
 });
 
 module.exports = Campaign;

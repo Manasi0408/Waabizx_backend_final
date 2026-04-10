@@ -2,18 +2,29 @@ const metaService = require('../services/meta.service');
 
 exports.handleCallback = async (req, res) => {
   try {
-    const { code, state: clientId } = req.query;
+    const code = req.query.code;
+
+    const debug = {
+      message: 'Callback hit',
+      code,
+    };
 
     if (!code) {
-      return res.status(400).send('Authorization code missing');
+      debug.error = 'No code received';
+      return res.send(`<pre>${JSON.stringify(debug, null, 2)}</pre>`);
     }
 
-    await metaService.completeOnboarding(code, clientId ? parseInt(clientId, 10) : null);
+    // Example: calling Meta API (replace with your logic)
+    // const response = await axios.post(...)
 
-    res.send('WhatsApp connected successfully');
-  } catch (error) {
-    console.error(error.response?.data || error.message);
-    res.status(500).send('Onboarding failed');
+    debug.success = 'Code received successfully';
+
+    return res.send(`<pre>${JSON.stringify(debug, null, 2)}</pre>`);
+  } catch (err) {
+    return res.send(`
+      <h1>Onboarding failed</h1>
+      <pre>${err.message}</pre>
+    `);
   }
 };
 

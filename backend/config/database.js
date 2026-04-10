@@ -1,11 +1,17 @@
 const { Sequelize } = require("sequelize");
 
+// Normalize host: Node often resolves "localhost" to ::1 (IPv6). MySQL users on shared hosting
+// (e.g. Hostinger) are usually granted for 127.0.0.1, not ::1, which causes "Access denied".
+const rawHost = process.env.DB_HOST || 'localhost';
+const normalizedHost =
+  rawHost === 'localhost' || rawHost === '::1' ? '127.0.0.1' : rawHost;
+
 // Get environment variables with fallbacks
 const dbConfig = {
   database: process.env.DB_NAME || 'aisensy_db',
   username: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || '', // Use empty if not set, don't use fallback password
-  host: process.env.DB_HOST || 'localhost',
+  host: normalizedHost,
   port: process.env.DB_PORT || 3306,
   dialect: 'mysql',
   logging: false,

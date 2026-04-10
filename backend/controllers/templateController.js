@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { Template } = require('../models');
 const { Op } = require('sequelize');
+const { requireProjectId } = require('../utils/projectScope');
 
 const getMetaToken = () => {
   return process.env.WHATSAPP_TOKEN ||
@@ -26,10 +27,13 @@ const normalizeMetaTemplateName = (name) => {
 exports.createTemplate = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { name, content, category, variables } = req.body;
 
     const template = await Template.create({
       userId,
+      projectId,
       name,
       content,
       category: category || 'other',
@@ -422,7 +426,8 @@ exports.createMetaTemplate = async (req, res) => {
       const existingTemplate = await Template.findOne({
         where: {
           name: normalizedName,
-          userId: userId
+          userId: userId,
+          projectId
         }
       });
 
@@ -440,6 +445,7 @@ exports.createMetaTemplate = async (req, res) => {
         // Create new template
         template = await Template.create({
           userId: userId,
+          projectId,
           name: normalizedName,
           content: bodyText,
           category: localCategory,
@@ -508,9 +514,11 @@ exports.createMetaTemplate = async (req, res) => {
 exports.getTemplates = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { category, status, page = 1, limit = 20 } = req.query;
 
-    const where = { userId };
+    const where = { userId, projectId };
     if (category) where.category = category;
     if (status) where.status = status;
 
@@ -545,10 +553,12 @@ exports.getTemplates = async (req, res) => {
 exports.getTemplateById = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { id } = req.params;
 
     const template = await Template.findOne({
-      where: { id, userId }
+      where: { id, userId, projectId }
     });
 
     if (!template) {
@@ -574,11 +584,13 @@ exports.getTemplateById = async (req, res) => {
 exports.updateTemplate = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { id } = req.params;
     const { name, content, category, variables } = req.body;
 
     const template = await Template.findOne({
-      where: { id, userId }
+      where: { id, userId, projectId }
     });
 
     if (!template) {
@@ -611,10 +623,12 @@ exports.updateTemplate = async (req, res) => {
 exports.deleteTemplate = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { id } = req.params;
 
     const template = await Template.findOne({
-      where: { id, userId }
+      where: { id, userId, projectId }
     });
 
     if (!template) {
@@ -643,6 +657,8 @@ exports.deleteTemplate = async (req, res) => {
 exports.getMetaTemplates = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const WABA_ID = process.env.WABA_ID;
     const TOKEN = getMetaToken();
     const apiVersion = getMetaApiVersion();
@@ -676,7 +692,8 @@ exports.getMetaTemplates = async (req, res) => {
         const existingTemplate = await Template.findOne({
           where: {
             name: metaTemplate.name,
-            userId: userId
+            userId: userId,
+            projectId
           }
         });
 
@@ -700,6 +717,7 @@ exports.getMetaTemplates = async (req, res) => {
         // Prepare template data
         const templateData = {
           userId: userId,
+          projectId,
           name: metaTemplate.name,
           content: bodyText,
           category: category,
@@ -727,16 +745,16 @@ exports.getMetaTemplates = async (req, res) => {
       }
     }
 
-    // Format templates with status information
-    const formattedTemplates = metaTemplates.map(template => ({
-      ...template,
-      status: template.status || 'PENDING', // APPROVED, REJECTED, or PENDING
-      metaStatus: template.status // Keep original Meta status
-    }));
+    // Return only templates saved for current project scope.
+    const projectTemplates = await Template.findAll({
+      where: { userId, projectId },
+      order: [['updatedAt', 'DESC']],
+      attributes: ['id', 'name', 'category', 'status', 'metaStatus', 'updatedAt', 'createdAt']
+    });
 
     return res.json({
       success: true,
-      templates: formattedTemplates,
+      templates: projectTemplates,
       statusSummary: {
         approved: metaTemplates.filter(t => t.status === 'APPROVED').length,
         rejected: metaTemplates.filter(t => t.status === 'REJECTED').length,

@@ -1,4 +1,4 @@
-const BASE_URL = "http://localhost:5000/api/agent/chat";
+const BASE_URL = "https://wabizx.techwhizzc.com/api/agent/chat";
 
 export const getActiveChats = async () => {
   const res = await fetch(`${BASE_URL}/active`);

@@ -27,7 +27,7 @@ class Project {
     const [rows] = await db.query(
       `SELECT p.*, u.name as owner_name, u.role as owner_role
        FROM projects p
-       JOIN Users u ON p.user_id = u.id
+       JOIN users u ON p.user_id = u.id
        WHERE p.user_id = ? ORDER BY p.created_at DESC`,
       [userId]
     );
@@ -36,11 +36,11 @@ class Project {
 
   static async findAll() {
     await this.ensureTable();
-    // Join with Users table created by Sequelize (usually `Users`)
+    // Join with users table (Sequelize User model uses `users`)
     const [rows] = await db.query(
       `SELECT p.*, u.name as owner_name, u.role as owner_role
        FROM projects p
-       JOIN Users u ON p.user_id = u.id
+       JOIN users u ON p.user_id = u.id
        ORDER BY p.created_at DESC`
     );
     return rows;

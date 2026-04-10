@@ -59,6 +59,11 @@ const Contact = sequelize.define('Contact', {
     type: DataTypes.INTEGER,
     allowNull: false
   },
+  projectId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: null
+  },
   // Additional contact features (commented out - columns don't exist in DB yet)
   // avatar: {
   //   type: DataTypes.STRING,
@@ -78,6 +83,7 @@ const Contact = sequelize.define('Contact', {
   // }
 }, {
   timestamps: true,
+  tableName: 'contacts',
   // Exclude non-existent fields from default queries
   defaultScope: {
     attributes: {

@@ -14,6 +14,11 @@ const Flow = sequelize.define(
       type: DataTypes.INTEGER,
       allowNull: false,
     },
+    projectId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: null,
+    },
     name: {
       type: DataTypes.STRING,
       allowNull: false,
@@ -29,6 +34,7 @@ const Flow = sequelize.define(
   },
   {
     timestamps: true,
+    tableName: 'flows',
   }
 );
 

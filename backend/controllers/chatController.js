@@ -22,6 +22,28 @@ const conversationListFields = `
   0 AS unread_count
 `;
 
+const getProjectIdFromReq = (req) => {
+  const n = Number(req?.projectId || req?.user?.projectId || null);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+const assertConversationInProject = async (conversationId, projectId) => {
+  const [rows] = await db.query(
+    `SELECT c.id
+     FROM conversations c
+     WHERE c.id = ?
+       AND EXISTS (
+         SELECT 1
+         FROM contacts ct
+         WHERE ct.phone = c.phone
+           AND ct.projectId = ?
+       )
+     LIMIT 1`,
+    [conversationId, projectId]
+  );
+  return Array.isArray(rows) && rows.length > 0;
+};
+
 exports.receiveMessage = async (req, res) => {
   try {
     const phone = req.body.phone;
@@ -73,11 +95,12 @@ exports.receiveMessage = async (req, res) => {
           const firstUser = await User.findOne({
             where: { status: "active" },
             order: [["id", "ASC"]],
-            attributes: ["id"],
+            attributes: ["id", "projectId"],
           });
           if (firstUser) {
             contact = await Contact.create({
               userId: firstUser.id,
+              projectId: firstUser.projectId || null,
               phone: normalizedPhone,
               name: normalizedPhone,
               status: isOptOut ? "unsubscribed" : "active",
@@ -154,12 +177,20 @@ exports.receiveMessage = async (req, res) => {
 // Manager Inbox: requesting conversations not yet assigned (agent_id IS NULL)
 exports.getManagerRequesting = async (req, res) => {
   try {
+    const projectId = getProjectIdFromReq(req);
+    if (!projectId) return res.status(400).json({ error: "Project is required" });
     const [rows] = await db.query(
       `SELECT ${conversationListFields}
        FROM conversations c
        WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'requesting'
          AND c.agent_id IS NULL
-       ORDER BY last_message_time DESC`
+         AND EXISTS (
+           SELECT 1 FROM contacts ct
+           WHERE ct.phone = c.phone
+             AND ct.projectId = ?
+         )
+       ORDER BY last_message_time DESC`,
+      [projectId]
     );
     res.json(rows);
   } catch (err) {
@@ -171,6 +202,8 @@ exports.getManagerRequesting = async (req, res) => {
 // Agent Requesting Tab: conversations assigned to this agent with status=requesting
 exports.getAgentRequesting = async (req, res) => {
   try {
+    const projectId = getProjectIdFromReq(req);
+    if (!projectId) return res.status(400).json({ error: "Project is required" });
     const agentId = req.query.agentId;
     if (!agentId) {
       return res.status(400).json({ error: "agentId query is required" });
@@ -179,8 +212,13 @@ exports.getAgentRequesting = async (req, res) => {
       `SELECT ${conversationListFields}
        FROM conversations c
        WHERE c.agent_id = ? AND LOWER(TRIM(COALESCE(c.status,''))) = 'requesting'
+         AND EXISTS (
+           SELECT 1 FROM contacts ct
+           WHERE ct.phone = c.phone
+             AND ct.projectId = ?
+         )
        ORDER BY last_message_time DESC`,
-      [agentId]
+      [agentId, projectId]
     );
     res.json(rows);
   } catch (err) {
@@ -192,10 +230,18 @@ exports.getAgentRequesting = async (req, res) => {
 // 1️⃣ MANAGER: see all conversations (any status)
 exports.getManagerConversations = async (req, res) => {
   try {
+    const projectId = getProjectIdFromReq(req);
+    if (!projectId) return res.status(400).json({ error: "Project is required" });
     const [rows] = await db.query(
       `SELECT ${conversationListFields}
        FROM conversations c
+       WHERE EXISTS (
+         SELECT 1 FROM contacts ct
+         WHERE ct.phone = c.phone
+           AND ct.projectId = ?
+       )
        ORDER BY last_message_time DESC`
+      , [projectId]
     );
     res.json(rows);
   } catch (err) {
@@ -215,6 +261,8 @@ const getCurrentUser = (req) => {
 
 exports.getAgentConversations = async (req, res) => {
   try {
+    const projectId = getProjectIdFromReq(req);
+    if (!projectId) return res.status(400).json({ success: false, message: "Project is required" });
     const { id: agentId } = getCurrentUser(req);
 
     if (agentId == null) {
@@ -229,8 +277,13 @@ exports.getAgentConversations = async (req, res) => {
        FROM conversations c
        WHERE c.agent_id = ?
          AND LOWER(TRIM(COALESCE(c.status,''))) IN ('active','intervened')
+         AND EXISTS (
+           SELECT 1 FROM contacts ct
+           WHERE ct.phone = c.phone
+             AND ct.projectId = ?
+         )
        ORDER BY last_message_time DESC`,
-      [agentId]
+      [agentId, projectId]
     );
 
     res.json(rows);
@@ -245,6 +298,8 @@ const isManagerRole = (role) => ["admin", "manager"].includes((role || "").toStr
 
 exports.getRequestingChats = async (req, res) => {
   try {
+    const projectId = getProjectIdFromReq(req);
+    if (!projectId) return res.status(400).json({ error: "Project is required" });
     const { id: userId, role } = getCurrentUser(req);
 
     let rows;
@@ -256,13 +311,18 @@ exports.getRequestingChats = async (req, res) => {
          FROM conversations c
          WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'requesting'
            AND c.agent_id = ?
+           AND EXISTS (
+                 SELECT 1 FROM contacts ct
+                 WHERE ct.phone = c.phone
+                   AND ct.projectId = ?
+               )
            AND TIMESTAMPDIFF(
                  HOUR,
                  (SELECT MAX(m.created_at) FROM message m WHERE m.conversation_id = c.id),
                  NOW()
                ) < 24
          ORDER BY last_message_time DESC`,
-        [userId]
+        [userId, projectId]
       );
       rows = agentRows;
     } else {
@@ -272,12 +332,18 @@ exports.getRequestingChats = async (req, res) => {
          FROM conversations c
          WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'requesting'
            AND c.agent_id IS NULL
+           AND EXISTS (
+                 SELECT 1 FROM contacts ct
+                 WHERE ct.phone = c.phone
+                   AND ct.projectId = ?
+               )
            AND TIMESTAMPDIFF(
                  HOUR,
                  (SELECT MAX(m.created_at) FROM message m WHERE m.conversation_id = c.id),
                  NOW()
                ) < 24
-         ORDER BY last_message_time DESC`
+         ORDER BY last_message_time DESC`,
+        [projectId]
       );
       rows = managerRows;
     }
@@ -291,6 +357,8 @@ exports.getRequestingChats = async (req, res) => {
 
 exports.getActiveChats = async (req, res) => {
   try {
+    const projectId = getProjectIdFromReq(req);
+    if (!projectId) return res.status(400).json({ error: "Project is required" });
     const { id: userId, role } = getCurrentUser(req);
 
     let rows;
@@ -302,8 +370,13 @@ exports.getActiveChats = async (req, res) => {
          FROM conversations c
          WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'active'
            AND c.agent_id = ?
+           AND EXISTS (
+             SELECT 1 FROM contacts ct
+             WHERE ct.phone = c.phone
+               AND ct.projectId = ?
+           )
          ORDER BY last_message_time DESC`,
-        [userId]
+        [userId, projectId]
       );
     } else {
       // Manager / others: see all active chats
@@ -311,7 +384,13 @@ exports.getActiveChats = async (req, res) => {
         `SELECT ${conversationListFields}
          FROM conversations c
          WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'active'
-         ORDER BY last_message_time DESC`
+           AND EXISTS (
+             SELECT 1 FROM contacts ct
+             WHERE ct.phone = c.phone
+               AND ct.projectId = ?
+           )
+         ORDER BY last_message_time DESC`,
+        [projectId]
       );
     }
 
@@ -324,6 +403,8 @@ exports.getActiveChats = async (req, res) => {
 
 exports.getIntervenedChats = async (req, res) => {
   try {
+    const projectId = getProjectIdFromReq(req);
+    if (!projectId) return res.status(400).json({ error: "Project is required" });
     const { id: userId, role } = getCurrentUser(req);
 
     let rows;
@@ -334,6 +415,11 @@ exports.getIntervenedChats = async (req, res) => {
         `SELECT ${conversationListFields}
          FROM conversations c
          WHERE c.agent_id = ?
+           AND EXISTS (
+             SELECT 1 FROM contacts ct
+             WHERE ct.phone = c.phone
+               AND ct.projectId = ?
+           )
            AND (
              LOWER(TRIM(COALESCE(c.status,''))) = 'intervened'
              OR (
@@ -346,7 +432,7 @@ exports.getIntervenedChats = async (req, res) => {
              )
            )
          ORDER BY last_message_time DESC`,
-        [userId]
+        [userId, projectId]
       );
     } else {
       // Manager: see all intervened chats
@@ -354,17 +440,24 @@ exports.getIntervenedChats = async (req, res) => {
       [rows] = await db.query(
         `SELECT ${conversationListFields}
          FROM conversations c
-         WHERE
-           LOWER(TRIM(COALESCE(c.status,''))) = 'intervened'
-           OR (
+         WHERE EXISTS (
+             SELECT 1 FROM contacts ct
+             WHERE ct.phone = c.phone
+               AND ct.projectId = ?
+           )
+           AND (
+             LOWER(TRIM(COALESCE(c.status,''))) = 'intervened'
+             OR (
              LOWER(TRIM(COALESCE(c.status,''))) = 'requesting'
              AND TIMESTAMPDIFF(
                    HOUR,
                    (SELECT MAX(m.created_at) FROM message m WHERE m.conversation_id = c.id),
                    NOW()
                  ) >= 24
+             )
            )
-         ORDER BY last_message_time DESC`
+         ORDER BY last_message_time DESC`,
+        [projectId]
       );
     }
 
@@ -378,7 +471,14 @@ exports.getIntervenedChats = async (req, res) => {
 exports.getChatMessages = async (req, res) => {
   try {
     const id = req.params.id;
+    const projectId = getProjectIdFromReq(req);
+    if (!projectId) return res.status(400).json({ error: "Project is required" });
     const { id: userId, role } = getCurrentUser(req);
+
+    const inProject = await assertConversationInProject(id, projectId);
+    if (!inProject) {
+      return res.status(404).json({ error: "Conversation not found" });
+    }
 
     // Agents may only load messages for conversations assigned to them (so intervened by another agent is hidden)
     if (isAgentRole(role)) {
@@ -513,6 +613,8 @@ exports.sendMessage = async (req, res) => {
 
     const body = req.body || {};
     const { conversation_id, message } = body;
+    const projectId = getProjectIdFromReq(req);
+    if (!projectId) return res.status(400).json({ success: false, error: "Project is required" });
 
     if (!conversation_id || !message) {
       return res.status(400).json({
@@ -522,6 +624,11 @@ exports.sendMessage = async (req, res) => {
     }
 
     const { id: userId, role } = getCurrentUser(req);
+
+    const inProject = await assertConversationInProject(conversation_id, projectId);
+    if (!inProject) {
+      return res.status(404).json({ success: false, error: "Conversation not found" });
+    }
 
     const [convRows] = await db.query(
       "SELECT id, agent_id, status, phone FROM conversations WHERE id = ?",
@@ -628,6 +735,8 @@ exports.sendTemplateMessage = async (req, res) => {
       templateParams = [],
       displayText,
     } = body;
+    const projectId = getProjectIdFromReq(req);
+    if (!projectId) return res.status(400).json({ success: false, error: "Project is required" });
 
     if (!conversation_id || !templateName) {
       return res.status(400).json({
@@ -637,6 +746,11 @@ exports.sendTemplateMessage = async (req, res) => {
     }
 
     const { id: userId, role } = getCurrentUser(req);
+
+    const inProject = await assertConversationInProject(conversation_id, projectId);
+    if (!inProject) {
+      return res.status(404).json({ success: false, error: "Conversation not found" });
+    }
 
     const [convRows] = await db.query(
       "SELECT id, agent_id, status, phone FROM conversations WHERE id = ?",

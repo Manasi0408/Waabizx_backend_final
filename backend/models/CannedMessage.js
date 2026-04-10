@@ -14,6 +14,11 @@ const CannedMessage = sequelize.define(
       type: DataTypes.INTEGER,
       allowNull: false,
     },
+    projectId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: null,
+    },
     name: {
       type: DataTypes.STRING,
       allowNull: false,
@@ -47,6 +52,7 @@ const CannedMessage = sequelize.define(
   },
   {
     timestamps: true,
+    tableName: 'cannedmessages',
   }
 );
 

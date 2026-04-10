@@ -29,7 +29,7 @@ function TemplateMessagesPage() {
       setTemplatesError("");
 
       try {
-        // 1) Local templates (Draft / Approved / Rejected)
+        // Local templates for currently selected project only.
         const localRes = await axios.get("/templates", {
           params: { page: 1, limit: 100 },
         });
@@ -48,42 +48,7 @@ function TemplateMessagesPage() {
           };
         });
 
-        // 2) Meta templates (PENDING / APPROVED / REJECTED)
-        const metaRes = await axios.get("/templates/meta");
-        const metaTemplates = Array.isArray(metaRes.data?.templates)
-          ? metaRes.data.templates
-          : [];
-
-        const mappedMeta = metaTemplates.map((t) => {
-          const metaStatus = String(t?.metaStatus || t?.status || "").toUpperCase();
-          const statusLabel =
-            metaStatus === "APPROVED" ? "Approved" : metaStatus === "PENDING" ? "Pending" : "Draft";
-
-          return {
-            id: `meta_${t.id}`,
-            title: t.name,
-            status: statusLabel,
-            tag: t.category ? String(t.category) : "Overall",
-          };
-        });
-
-        // Merge and de-duplicate by title
-        const byTitle = new Map();
-        [...mappedLocal, ...mappedMeta].forEach((t) => {
-          const key = String(t.title || "").trim().toLowerCase();
-          if (!key) return;
-          if (!byTitle.has(key)) {
-            byTitle.set(key, t);
-            return;
-          }
-          const existing = byTitle.get(key);
-          // Prefer Pending/Approved over Draft when the same template exists in multiple sources.
-          if (existing?.status === "Draft" && t?.status !== "Draft") {
-            byTitle.set(key, t);
-          }
-        });
-
-        setTemplates(Array.from(byTitle.values()));
+        setTemplates(mappedLocal);
       } catch (e) {
         setTemplatesError(e?.response?.data?.message || e?.message || "Failed to load templates");
         setTemplates([]);

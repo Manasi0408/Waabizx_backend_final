@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
-const { User, PasswordResetToken } = require('../models');
+const { sequelize, User, PasswordResetToken } = require('../models');
 const Setting = require('../models/Setting');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
@@ -8,6 +8,7 @@ const bcrypt = require('bcryptjs');
 const nodemailer = require('nodemailer');
 const { sendMessage } = require('../services/aisensyService');
 const { sendTemplate: sendMetaTemplate } = require('../services/whatsappService');
+const { requireProjectId } = require('../utils/projectScope');
 
 const looksLikeBcryptHash = (value) => {
   return typeof value === 'string' && /^\$2[aby]\$\d{2}\$/.test(value);
@@ -29,6 +30,12 @@ const PASSWORD_RESET_OTP_HASH_SALT = process.env.PASSWORD_RESET_OTP_SALT || proc
 
 const normalizeMobileNumber = (value) => {
   return String(value || '').replace(/\D/g, '').trim();
+};
+
+const parseProjectIdFromRequest = (req) => {
+  const raw = req?.projectId ?? req?.headers?.['x-project-id'] ?? req?.body?.projectId;
+  const projectId = Number(raw);
+  return Number.isInteger(projectId) && projectId > 0 ? projectId : null;
 };
 
 const createOtpCode = () => String(Math.floor(100000 + Math.random() * 900000));
@@ -334,7 +341,8 @@ exports.register = async (req, res) => {
         email: trimmedEmail,
         password: passwordToStore,
         avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(trimmedName)}&background=random`,
-        role: normalizedRole
+        role: normalizedRole,
+        projectId: parseProjectIdFromRequest(req)
       });
     } catch (createError) {
       logger.error('User creation error', createError);
@@ -726,14 +734,16 @@ exports.resetPassword = async (req, res) => {
 
 exports.listAgents = async (req, res) => {
   try {
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const [agents, admins] = await Promise.all([
       User.findAll({
-        where: { role: 'agent' },
+        where: { role: 'agent', projectId },
         attributes: ['id', 'name', 'email', 'avatar', 'role', 'status', 'lastLogin', 'createdAt', 'updatedAt'],
         order: [['createdAt', 'DESC']]
       }),
       User.findAll({
-        where: { role: 'admin' },
+        where: { role: 'admin', projectId },
         attributes: ['id', 'name', 'email', 'avatar', 'role', 'status', 'lastLogin', 'createdAt', 'updatedAt'],
         order: [['createdAt', 'DESC']]
       })
@@ -760,6 +770,8 @@ exports.listAgents = async (req, res) => {
 
 exports.updateAgent = async (req, res) => {
   try {
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const targetId = Number(req.params.id);
     if (!targetId || Number.isNaN(targetId)) {
       return res.status(400).json({
@@ -768,7 +780,7 @@ exports.updateAgent = async (req, res) => {
       });
     }
 
-    const { name, email, role } = req.body || {};
+    const { name, email, role, status } = req.body || {};
 
     const requesterRole = String(req.user?.role || '').toLowerCase().trim();
     if (!req.user) {
@@ -786,7 +798,7 @@ exports.updateAgent = async (req, res) => {
       });
     }
 
-    const agent = await User.findOne({ where: { id: targetId } });
+    const agent = await User.findOne({ where: { id: targetId, projectId } });
 
     if (!agent) {
       return res.status(404).json({
@@ -813,9 +825,21 @@ exports.updateAgent = async (req, res) => {
       }
     }
 
+    let newStatus = null;
+    if (status != null) {
+      newStatus = String(status).toLowerCase().trim();
+      if (!['active', 'inactive'].includes(newStatus)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid status'
+        });
+      }
+    }
+
     if (typeof name === 'string' && name.trim()) agent.name = name.trim();
     if (typeof email === 'string' && email.trim()) agent.email = email.trim().toLowerCase();
     if (newRole) agent.role = newRole;
+    if (newStatus) agent.status = newStatus;
 
     await agent.save();
 
@@ -848,7 +872,60 @@ exports.updateAgent = async (req, res) => {
   }
 };
 
+exports.deleteAgent = async (req, res) => {
+  try {
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
+    const targetId = Number(req.params.id);
+    if (!targetId || Number.isNaN(targetId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid agent id'
+      });
+    }
+
+    const requesterRole = String(req.user?.role || '').toLowerCase().trim();
+    if (requesterRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin can delete agent'
+      });
+    }
+
+    const agent = await User.findOne({ where: { id: targetId, projectId } });
+    if (!agent) {
+      return res.status(404).json({
+        success: false,
+        message: 'Agent not found'
+      });
+    }
+
+    const targetRole = String(agent.role || '').toLowerCase().trim();
+    if (!['agent', 'admin'].includes(targetRole)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Agent not found'
+      });
+    }
+
+    await agent.destroy();
+
+    return res.json({
+      success: true,
+      message: 'Agent deleted successfully'
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
 exports.login = async (req, res) => {
+  console.log('------------------->>login ');
+  
   try {
     const body = req.body || {};
     const email = body.email || body.Email || body.EMAIL || '';
@@ -871,7 +948,25 @@ exports.login = async (req, res) => {
     const trimmedEmail = String(email).trim().toLowerCase();
     const trimmedPassword = String(password).trim();
 
-    const user = await User.findOne({ where: { email: trimmedEmail } });
+    let user = await User.findOne({ where: { email: trimmedEmail } });
+    if (!user) {
+      // Production safeguard: some environments have legacy/case-variant table names.
+      // Fallback to direct lookup in both table variants before failing credentials.
+      for (const tableName of ['users', 'Users']) {
+        try {
+          const [rows] = await sequelize.query(
+            `SELECT * FROM \`${tableName}\` WHERE email = :email LIMIT 1`,
+            { replacements: { email: trimmedEmail } }
+          );
+          if (Array.isArray(rows) && rows.length > 0) {
+            user = User.build(rows[0], { isNewRecord: false });
+            break;
+          }
+        } catch (_) {
+          // Ignore table missing errors and try next variant.
+        }
+      }
+    }
     if (!user) {
       return res.status(401).json({
         success: false,

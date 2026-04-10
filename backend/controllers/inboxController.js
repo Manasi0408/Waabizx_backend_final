@@ -1,8 +1,9 @@
 const { Contact, Message, MetaMessage, InboxMessage, sequelize } = require('../models');
 const { Op } = require('sequelize');
-const { sendText, sendTemplate } = require('../services/whatsappService');
+const { sendText } = require('../services/whatsappService');
 const socketService = require('../services/socketService');
 const { upsertConversationWithQuota } = require('../services/conversationBillingService');
+const { requireProjectId } = require('../utils/projectScope');
 
 const isAgentRole = (r) => (r || '').toString().toLowerCase() === 'agent';
 
@@ -12,6 +13,8 @@ const isAgentRole = (r) => (r || '').toString().toLowerCase() === 'agent';
 exports.getInboxList = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const role = (req.user.role || '').toString().toLowerCase();
     const agentSeesAll = isAgentRole(role);
     const contactTableName = Contact.tableName;
@@ -19,7 +22,7 @@ exports.getInboxList = async (req, res) => {
     const metaMessageTableName = MetaMessage.tableName;
 
     const userFilter = agentSeesAll ? '' : 'AND c.userId = :userId';
-    const replacements = agentSeesAll ? {} : { userId };
+    const replacements = agentSeesAll ? { projectId } : { userId, projectId };
 
     const inboxList = await sequelize.query(`
       SELECT DISTINCT
@@ -72,6 +75,7 @@ exports.getInboxList = async (req, res) => {
         ) as chatStatus
       FROM \`${contactTableName}\` c
       WHERE 1=1 ${userFilter}
+        AND c.projectId = :projectId
         AND (
           EXISTS (
             SELECT 1 
@@ -115,7 +119,7 @@ exports.getInboxList = async (req, res) => {
           LIMIT 1
         ) as chatStatus
       FROM \`${metaMessageTableName}\` mm
-      ${agentSeesAll ? '' : 'WHERE NOT EXISTS (SELECT 1 FROM `' + contactTableName + '` c2 WHERE c2.phone = mm.phone AND c2.userId = :userId)'}
+      ${agentSeesAll ? 'WHERE EXISTS (SELECT 1 FROM `' + contactTableName + '` c2 WHERE c2.phone = mm.phone AND c2.projectId = :projectId)' : 'WHERE NOT EXISTS (SELECT 1 FROM `' + contactTableName + '` c2 WHERE c2.phone = mm.phone AND c2.userId = :userId AND c2.projectId = :projectId) AND EXISTS (SELECT 1 FROM `' + contactTableName + '` c3 WHERE c3.phone = mm.phone AND c3.projectId = :projectId)'}
       GROUP BY mm.phone
       ORDER BY lastMessageTime DESC
     `, {
@@ -176,6 +180,8 @@ exports.getInboxList = async (req, res) => {
 exports.getContactMessages = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const role = (req.user.role || '').toString().toLowerCase();
     const agentSeesAll = isAgentRole(role);
     // Decode phone number - handle both encoded and non-encoded formats
@@ -187,7 +193,7 @@ exports.getContactMessages = async (req, res) => {
     }
     phone = phone.replace(/%2B/g, '+');
 
-    const contactWhere = agentSeesAll ? { phone } : { phone, userId };
+    const contactWhere = agentSeesAll ? { phone, projectId } : { phone, userId, projectId };
     const contact = await Contact.findOne({
       where: contactWhere
     });
@@ -219,8 +225,8 @@ exports.getContactMessages = async (req, res) => {
     });
 
     const inboxMessageWhere = agentSeesAll
-      ? { contactId: contact.id }
-      : { contactId: contact.id, userId };
+      ? { contactId: contact.id, projectId }
+      : { contactId: contact.id, userId, projectId };
     const inboxMessages = await InboxMessage.findAll({
       where: inboxMessageWhere,
       order: [['timestamp', 'ASC']],
@@ -298,6 +304,8 @@ exports.getContactMessages = async (req, res) => {
 exports.sendMessage = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { phone, message: text } = req.body; // Accept both 'phone' and 'to', 'message' and 'text'
 
     // Support multiple field names for compatibility
@@ -317,13 +325,14 @@ exports.sendMessage = async (req, res) => {
     // 1️⃣ Ensure contact exists - phone has unique constraint, so find by phone first
     // Then update userId if different (contact might exist for different user)
     let contact = await Contact.findOne({
-      where: { phone: normalizedPhone }
+      where: { phone: normalizedPhone, projectId }
     });
 
     if (!contact) {
       // Contact doesn't exist, create new one
       contact = await Contact.create({
         userId: userId,
+        projectId,
         phone: normalizedPhone,
         name: normalizedPhone, // Default name to phone number
         status: 'active'
@@ -332,8 +341,8 @@ exports.sendMessage = async (req, res) => {
     } else {
       // Contact exists - update userId if different (in case phone was shared across users)
       const oldUserId = contact.userId;
-      if (contact.userId !== userId) {
-        await contact.update({ userId: userId });
+      if (contact.userId !== userId || contact.projectId !== projectId) {
+        await contact.update({ userId: userId, projectId });
         // Reload contact to get updated data
         await contact.reload();
         console.log('✅ Updated contact userId (ID:', contact.id + ', old userId:', oldUserId + ', new userId:', userId + ')');
@@ -363,6 +372,7 @@ exports.sendMessage = async (req, res) => {
         inboxMessage = await InboxMessage.create({
           contactId: contact.id,
           userId,
+          projectId,
           direction: 'outgoing',
           message: messageText,
           type: 'text',
@@ -412,29 +422,7 @@ exports.sendMessage = async (req, res) => {
       });
     }
 
-    // 2️⃣ Check 24-hour window - Look for last inbound message from this contact
-    const lastInbound = await InboxMessage.findOne({
-      where: {
-        contactId: contact.id,
-        direction: 'incoming'
-      },
-      order: [['timestamp', 'DESC']]
-    });
-
-    // Calculate if 24-hour window is open
-    const is24hOpen = lastInbound && 
-      (Date.now() - new Date(lastInbound.timestamp).getTime() < 24 * 60 * 60 * 1000);
-
-    console.log('📅 24-hour window check:', {
-      hasLastInbound: !!lastInbound,
-      lastInboundTime: lastInbound?.timestamp,
-      is24hOpen,
-      hoursSinceLastMessage: lastInbound 
-        ? Math.round((Date.now() - new Date(lastInbound.timestamp).getTime()) / (60 * 60 * 1000) * 10) / 10 
-        : null
-    });
-
-    // 3️⃣ Save message first (will update with waMessageId after API call)
+    // 2️⃣ Save message first (will update with waMessageId after API call)
     const message = await Message.create({
       contactId: contact.id,
       content: messageText,
@@ -449,6 +437,7 @@ exports.sendMessage = async (req, res) => {
       inboxMessage = await InboxMessage.create({
         contactId: contact.id,
         userId,
+        projectId,
         direction: 'outgoing',
         message: messageText,
         type: 'text',
@@ -459,10 +448,10 @@ exports.sendMessage = async (req, res) => {
       console.error('Error saving to InboxMessage:', inboxError);
     }
 
-    // 4️⃣ Send via Meta Cloud API based on 24-hour window
+    // 3️⃣ Send exact user message text (same behavior as /live-chat).
+    // Never replace user content with default template fallback.
     let sendResult = null;
     let apiError = null;
-    let messageSent = false;
 
     try {
       // Conversation billing/quota enforcement (24-hour rolling).
@@ -508,35 +497,12 @@ exports.sendMessage = async (req, res) => {
             sentAt: message.sentAt,
             contactId: contact.id,
             waMessageId: null,
-            is24hWindow: is24hOpen,
-            messageType: is24hOpen ? 'text' : 'template',
+            messageType: 'text',
           }
         });
       }
 
-      if (is24hOpen) {
-        // ✅ CASE 1: 24-Hour Window OPEN - Send TEXT message
-        console.log('🟢 24-hour window OPEN - Sending TEXT message via Meta API');
-        sendResult = await sendText(normalizedPhone, messageText);
-        messageSent = true;
-      } else {
-        // ❌ CASE 2: 24-Hour Window CLOSED - Send TEMPLATE message
-        // Default template name - can be configured via env or passed in request
-        const templateName = req.body.templateName || process.env.DEFAULT_TEMPLATE_NAME || 'hello_world';
-        const templateLanguage = req.body.templateLanguage || 'en_US';
-        
-        console.log('🔴 24-hour window CLOSED - Sending TEMPLATE message via Meta API:', {
-          templateName,
-          templateLanguage,
-          note: 'User message will be ignored, template will be sent instead'
-        });
-        
-        sendResult = await sendTemplate(normalizedPhone, templateName, templateLanguage);
-        messageSent = true;
-        
-        // Note: The actual template is sent, not the user's message
-        // You might want to log this or handle it differently
-      }
+      sendResult = await sendText(normalizedPhone, messageText);
 
       if (sendResult && sendResult.success) {
         console.log('✅ Meta API call successful:', {
@@ -575,7 +541,7 @@ exports.sendMessage = async (req, res) => {
       }
     }
 
-    // 5️⃣ Update contact's lastContacted
+    // 4️⃣ Update contact's lastContacted
     await contact.update({
       lastContacted: new Date()
     });
@@ -626,8 +592,7 @@ exports.sendMessage = async (req, res) => {
         sentAt: message.sentAt,
         contactId: contact.id,
         waMessageId: inboxMessage?.waMessageId || sendResult?.wamid,
-        is24hWindow: is24hOpen,
-        messageType: is24hOpen ? 'text' : 'template'
+        messageType: 'text'
       }
     });
   } catch (error) {
@@ -644,6 +609,8 @@ exports.sendMessage = async (req, res) => {
 exports.markAsRead = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     // Decode phone number - handle both encoded and non-encoded formats
     let phone = req.params.phone;
     try {
@@ -660,7 +627,8 @@ exports.markAsRead = async (req, res) => {
     const contact = await Contact.findOne({
       where: {
         phone,
-        userId
+        userId,
+        projectId
       }
     });
 

@@ -1,4 +1,4 @@
-const API_URL = 'http://localhost:5000';
+const API_URL = 'https://wabizx.techwhizzc.com/';
 
 // Get token from localStorage
 const getToken = () => {

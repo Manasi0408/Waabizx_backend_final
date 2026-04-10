@@ -13,11 +13,13 @@ exports.createProject = async (req, res) => {
     }
 
     const projectId = await Project.create(req.user.id, String(project_name).trim());
+    const project = await Project.findById(projectId);
 
     res.status(201).json({
       success: true,
       message: 'Project created successfully',
       projectId,
+      project,
     });
   } catch (error) {
     res.status(500).json({

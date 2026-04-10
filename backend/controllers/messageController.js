@@ -818,7 +818,7 @@ exports.sendTemplate = async (req, res) => {
     // Save in DB - CRITICAL: Must save to track template sends
     let savedMessage = null;
     try {
-      console.log('💾 Attempting to save template to InboxMessages:', {
+      console.log('💾 Attempting to save template to inboxmessages:', {
         contactId: contact.id,
         userId: userId,
         templateName: templateName,
@@ -844,7 +844,7 @@ exports.sendTemplate = async (req, res) => {
         timestamp: new Date()
       });
       
-      console.log('✅ Template message saved to InboxMessages (ID:', savedMessage.id + ')');
+      console.log('✅ Template message saved to inboxmessages (ID:', savedMessage.id + ')');
     } catch (dbError) {
       console.error("❌ CRITICAL: Database Error saving template!");
       console.error("Error Type:", dbError.name);
@@ -862,7 +862,7 @@ exports.sendTemplate = async (req, res) => {
 
       // Check if it's a table doesn't exist error
       if (dbError.message && (dbError.message.includes("doesn't exist") || dbError.message.includes("Unknown table"))) {
-        console.error("⚠️  TABLE MISSING: InboxMessages table doesn't exist!");
+        console.error("⚠️  TABLE MISSING: inboxmessages table doesn't exist!");
         console.error("⚠️  Attempting to create table...");
         try {
           await InboxMessage.sync({ force: false, alter: true });
@@ -878,7 +878,7 @@ exports.sendTemplate = async (req, res) => {
             waMessageId: waMessageId,
             timestamp: new Date()
           });
-          console.log('✅ Template message saved to InboxMessages (ID:', savedMessage.id + ') after table creation');
+          console.log('✅ Template message saved to inboxmessages (ID:', savedMessage.id + ') after table creation');
         } catch (retryError) {
           console.error("❌ Failed to create table or retry save:", retryError.message);
         }

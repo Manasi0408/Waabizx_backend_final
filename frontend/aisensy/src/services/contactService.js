@@ -1,4 +1,4 @@
-const API_URL = 'http://localhost:5000/api';
+const API_URL = 'https://wabizx.techwhizzc.com/api';
 
 // Get token from localStorage
 const getToken = () => {
@@ -29,7 +29,11 @@ export const createContact = async (contactData) => {
     }
 
     if (data.success) {
-      return data.contact;
+      return {
+        contact: data.contact,
+        message: data.message || '',
+        alreadyExists: /already exists/i.test(String(data.message || ''))
+      };
     }
 
     throw new Error(data.message || 'Failed to create contact');

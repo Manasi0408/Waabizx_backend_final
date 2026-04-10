@@ -65,8 +65,15 @@ const User = sequelize.define('User', {
     type: DataTypes.STRING(64),
     allowNull: true,
     defaultValue: null
+  },
+  projectId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: null
   }
 }, {
+  tableName: 'users',
+  freezeTableName: true,
   hooks: {
     beforeCreate: async (user) => {
       if (user.password) {

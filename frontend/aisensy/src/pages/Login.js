@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
-import { login, requestPasswordReset, resetPassword } from '../services/authService';
+import { login, requestPasswordReset, resetPassword, getProfile } from '../services/authService';
 
 const inputClass =
   'w-full rounded-xl border-2 border-gray-200/90 bg-white px-4 py-2.5 text-sm text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-400 focus:border-sky-400 focus:ring-4 focus:ring-sky-500/10 sm:py-3';
@@ -71,12 +71,38 @@ function Login() {
       console.log('LOGIN RESPONSE:', response);
 
       if (response.success && response.token) {
-        const user = response.user || { id: response.id, name: response.name, role: response.role };
-
         localStorage.setItem('token', response.token);
-        localStorage.setItem('user', JSON.stringify(user));
-        localStorage.setItem('role', (user.role || response.role || '').toString().toLowerCase());
-        navigate('/dashboard');
+        // Source-of-truth role: profile from backend after token is set.
+        // This avoids stale/partial login payloads.
+        let resolvedUser = response.user || { id: response.id, name: response.name, role: response.role };
+        try {
+          const profile = await getProfile();
+          if (profile && typeof profile === 'object') {
+            resolvedUser = profile;
+          }
+        } catch (_) {
+          // Keep fallback from login response if profile fetch fails.
+        }
+
+        localStorage.setItem('user', JSON.stringify(resolvedUser));
+        const normalizedRole = (resolvedUser.role || response.role || '')
+          .toString()
+          .toLowerCase()
+          .trim()
+          .replace(/-/g, '_')
+          .replace(/\s+/g, '_');
+        localStorage.setItem('role', normalizedRole);
+        if (normalizedRole === 'super_admin' || normalizedRole === 'superadmin') {
+          navigate('/super-admin');
+        } else if (normalizedRole === 'admin') {
+          navigate('/project-dashboard');
+        } else if (normalizedRole === 'manager') {
+          navigate('/admin');
+        } else if (normalizedRole === 'agent') {
+          navigate('/agent');
+        } else {
+          navigate('/admin');
+        }
         return;
       }
     } catch (err) {

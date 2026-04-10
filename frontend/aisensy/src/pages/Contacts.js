@@ -40,7 +40,13 @@ function Contacts() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [toast, setToast] = useState({ show: false, type: 'info', message: '' });
   const notificationRef = useRef(null);
+
+  const showToast = (message, type = 'info') => {
+    setToast({ show: true, type, message });
+    setTimeout(() => setToast({ show: false, type: 'info', message: '' }), 3500);
+  };
 
   // Fetch user profile
   useEffect(() => {
@@ -181,14 +187,18 @@ function Contacts() {
 
     try {
       const tagsArray = formData.tags ? formData.tags.split(',').map(tag => tag.trim()).filter(tag => tag) : [];
-      await createContact({
+      const result = await createContact({
         phone: formData.phone,
         name: formData.name,
         email: formData.email || null,
         tags: tagsArray,
         country: formData.country || null
       });
-      setSuccess('Contact created successfully!');
+      if (result?.alreadyExists) {
+        showToast('This number already exists. Try with another number.', 'warning');
+      } else {
+        setSuccess('Contact created successfully!');
+      }
       setShowCreateModal(false);
       setFormData({ phone: '', name: '', email: '', tags: '', country: '' });
       fetchContacts();
@@ -341,6 +351,21 @@ function Contacts() {
 
   return (
     <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+      {toast.show && (
+        <div className="fixed top-5 right-5 z-[9999] motion-pop">
+          <div
+            className={`rounded-xl border px-4 py-3 shadow-xl backdrop-blur-sm max-w-sm ${
+              toast.type === 'warning'
+                ? 'bg-amber-50/95 border-amber-200 text-amber-800'
+                : toast.type === 'success'
+                  ? 'bg-green-50/95 border-green-200 text-green-800'
+                  : 'bg-sky-50/95 border-sky-200 text-sky-800'
+            }`}
+          >
+            <p className="text-sm font-medium">{toast.message}</p>
+          </div>
+        </div>
+      )}
       <header className="motion-header-enter shrink-0 z-10 bg-white/90 backdrop-blur-md border-b border-gray-200/80 px-4 md:px-8 py-3.5 md:py-4 flex justify-between items-center shadow-sm shadow-gray-200/50">
         <div className="flex items-center gap-4 min-w-0">
           <button

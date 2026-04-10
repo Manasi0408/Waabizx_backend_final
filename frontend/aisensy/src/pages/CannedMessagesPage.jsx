@@ -104,7 +104,7 @@ export default function CannedMessagesPage({ apiPath = "/canned-messages" } = {}
     if (!u) return u;
     if (u.startsWith("http://") || u.startsWith("https://")) return u;
     // Backend serves static uploads from `${API_HOST}/uploads/...`
-    if (u.startsWith("/")) return `http://localhost:5000${u}`;
+    if (u.startsWith("/")) return `https://wabizx.techwhizzc.com/{u}`;
     return u;
   };
 

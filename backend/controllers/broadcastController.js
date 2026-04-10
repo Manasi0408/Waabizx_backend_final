@@ -4,6 +4,7 @@ const { sendTemplate } = require('../services/whatsappService');
 const multer = require('multer');
 const csv = require('csv-parser');
 const { Readable } = require('stream');
+const { requireProjectId } = require('../utils/projectScope');
 
 // Configure multer for CSV upload
 const upload = multer({
@@ -116,10 +117,12 @@ exports.parseCSV = async (req, res) => {
 exports.getContacts = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { page = 1, limit = 100, search = '', tags = '' } = req.query;
     
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    const where = { userId };
+    const where = { userId, projectId };
     
     if (search) {
       where[Op.or] = [
@@ -175,10 +178,12 @@ exports.getContacts = async (req, res) => {
 exports.getSegments = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     
     // Get all unique tags from contacts
     const contacts = await Contact.findAll({
-      where: { userId },
+      where: { userId, projectId },
       attributes: ['tags']
     });
     
@@ -215,11 +220,14 @@ exports.getSegments = async (req, res) => {
 exports.getContactsBySegment = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { tag } = req.params;
     
     const contacts = await Contact.findAll({
       where: {
         userId,
+        projectId,
         tags: { [Op.contains]: [tag] }
       },
       attributes: ['id', 'phone', 'name', 'email', 'tags', 'customFields']
@@ -253,6 +261,8 @@ exports.getContactsBySegment = async (req, res) => {
 exports.validateTemplate = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { template_name, template_language = 'en_US', variable_mapping } = req.body;
     
     if (!template_name) {
@@ -327,6 +337,8 @@ exports.validateTemplate = async (req, res) => {
 exports.createBroadcast = async (req, res) => {
   try {
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const {
       name,
       template_name,
@@ -358,7 +370,8 @@ exports.createBroadcast = async (req, res) => {
       const contacts = await Contact.findAll({
         where: {
           id: { [Op.in]: contactIds },
-          userId
+          userId,
+          projectId
         }
       });
       
@@ -388,6 +401,7 @@ exports.createBroadcast = async (req, res) => {
       const contacts = await Contact.findAll({
         where: {
           userId,
+          projectId,
           tags: { [Op.contains]: [segment_tag] }
         }
       });
@@ -416,7 +430,7 @@ exports.createBroadcast = async (req, res) => {
     
     // Validate template variables
     const template = await Template.findOne({
-      where: { name: template_name, userId }
+      where: { name: template_name, userId, projectId }
     });
     
     if (!template) {
@@ -466,6 +480,7 @@ exports.createBroadcast = async (req, res) => {
     // Create campaign
     const campaign = await Campaign.create({
       userId,
+      projectId,
       name,
       template_name,
       template_language,

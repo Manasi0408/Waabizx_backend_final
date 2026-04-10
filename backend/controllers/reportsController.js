@@ -1,4 +1,5 @@
 const { sequelize } = require('../models');
+const { requireProjectId } = require('../utils/projectScope');
 
 /**
  * Intervened report by date.
@@ -7,6 +8,8 @@ const { sequelize } = require('../models');
  */
 exports.getIntervenedReport = async (req, res) => {
   try {
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const dateStr = String(req.query.date || '').trim();
     const date = dateStr || new Date().toISOString().slice(0, 10);
 
@@ -27,11 +30,12 @@ exports.getIntervenedReport = async (req, res) => {
        AND LOWER(TRIM(COALESCE(c.status,''))) = 'intervened'
        AND DATE(COALESCE(c.created_at, c.last_message_time)) = :date
       WHERE u.role IN ('agent','admin')
+        AND u.projectId = :projectId
       GROUP BY u.id, u.name, u.email
       ORDER BY intervenedMessages DESC, intervenedConversations DESC
       `,
       {
-        replacements: { date },
+        replacements: { date, projectId },
         type: sequelize.QueryTypes.SELECT,
       }
     );
@@ -44,10 +48,15 @@ exports.getIntervenedReport = async (req, res) => {
       FROM conversations c
       WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'intervened'
         AND c.agent_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.id = c.agent_id
+            AND u.projectId = :projectId
+        )
         AND DATE(COALESCE(c.created_at, c.last_message_time)) = :date
       `,
       {
-        replacements: { date },
+        replacements: { date, projectId },
         type: sequelize.QueryTypes.SELECT,
       }
     );
@@ -80,6 +89,8 @@ exports.getIntervenedReport = async (req, res) => {
 
 exports.exportIntervenedReport = async (req, res) => {
   try {
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const dateStr = String(req.query.date || '').trim();
     const date = dateStr || new Date().toISOString().slice(0, 10);
     const agentIdRaw = req.query.agentId;
@@ -97,12 +108,13 @@ exports.exportIntervenedReport = async (req, res) => {
         ON u.id = c.agent_id
       WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'intervened'
         AND u.role IN ('agent','admin')
+        AND u.projectId = :projectId
         AND DATE(COALESCE(c.created_at, c.last_message_time)) = :date
         AND (:agentId IS NULL OR c.agent_id = :agentId)
       ORDER BY c.id DESC
       `,
       {
-        replacements: { date, agentId },
+        replacements: { date, agentId, projectId },
         type: sequelize.QueryTypes.SELECT,
       }
     );
@@ -139,6 +151,8 @@ exports.exportIntervenedReport = async (req, res) => {
 
 exports.getIntervenedCustomerReport = async (req, res) => {
   try {
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const dateStr = String(req.query.date || '').trim();
     const date = dateStr || new Date().toISOString().slice(0, 10);
 
@@ -171,6 +185,7 @@ exports.getIntervenedCustomerReport = async (req, res) => {
         ON u.id = c.agent_id
       WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'intervened'
         AND u.role IN ('agent','admin')
+        AND u.projectId = :projectId
         AND DATE(COALESCE(c.created_at, c.last_message_time)) = :date
         AND (
           (:agentId IS NULL AND :adminId IS NULL)
@@ -181,7 +196,7 @@ exports.getIntervenedCustomerReport = async (req, res) => {
       ORDER BY intervened_conversations_count DESC
       `,
       {
-        replacements: { date, agentId, adminId },
+        replacements: { date, agentId, adminId, projectId },
         type: sequelize.QueryTypes.SELECT,
       }
     );
@@ -195,6 +210,7 @@ exports.getIntervenedCustomerReport = async (req, res) => {
         ON u.id = c.agent_id
       WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'intervened'
         AND u.role IN ('agent','admin')
+        AND u.projectId = :projectId
         AND DATE(COALESCE(c.created_at, c.last_message_time)) = :date
         AND (
           (:agentId IS NULL AND :adminId IS NULL)
@@ -203,7 +219,7 @@ exports.getIntervenedCustomerReport = async (req, res) => {
         )
       `,
       {
-        replacements: { date, agentId, adminId },
+        replacements: { date, agentId, adminId, projectId },
         type: sequelize.QueryTypes.SELECT,
       }
     );
@@ -232,6 +248,8 @@ exports.getIntervenedCustomerReport = async (req, res) => {
 
 exports.exportIntervenedCustomerReport = async (req, res) => {
   try {
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const dateStr = String(req.query.date || '').trim();
     const date = dateStr || new Date().toISOString().slice(0, 10);
 
@@ -264,6 +282,7 @@ exports.exportIntervenedCustomerReport = async (req, res) => {
         ON u.id = c.agent_id
       WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'intervened'
         AND u.role IN ('agent','admin')
+        AND u.projectId = :projectId
         AND DATE(COALESCE(c.created_at, c.last_message_time)) = :date
         AND (
           (:agentId IS NULL AND :adminId IS NULL)
@@ -274,7 +293,7 @@ exports.exportIntervenedCustomerReport = async (req, res) => {
       ORDER BY intervened_conversations_count DESC
       `,
       {
-        replacements: { date, agentId, adminId },
+        replacements: { date, agentId, adminId, projectId },
         type: sequelize.QueryTypes.SELECT,
       }
     );

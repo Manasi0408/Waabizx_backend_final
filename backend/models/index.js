@@ -107,15 +107,22 @@ const syncDatabase = async () => {
     // Ensure Users mobile column exists (supports mobile_number / mobileNumber)
     try {
       const queryInterface = sequelize.getQueryInterface();
-      const table = await queryInterface.describeTable('Users');
+      let userTable = 'users';
+      let table;
+      try {
+        table = await queryInterface.describeTable('users');
+      } catch (_) {
+        userTable = 'Users';
+        table = await queryInterface.describeTable('Users');
+      }
       const hasMobileColumn = !!table.mobile_number || !!table.mobileNumber;
       if (!hasMobileColumn) {
-        await queryInterface.addColumn('Users', 'mobile_number', {
+        await queryInterface.addColumn(userTable, 'mobile_number', {
           type: DataTypes.STRING(20),
           allowNull: true,
           unique: true
         });
-        console.log('✅ Users.mobile_number column added.');
+        console.log(`✅ ${userTable}.mobile_number column added.`);
       } else {
         console.log('✅ Users mobile column already exists.');
       }
@@ -126,6 +133,39 @@ const syncDatabase = async () => {
     try {
       const Contact = require('./Contact');
       await Contact.sync({ force: false, alter: true });
+      // contacts should be unique per user + phone (not globally by phone)
+      try {
+        const queryInterface = sequelize.getQueryInterface();
+        const indexes = await queryInterface.showIndex('contacts');
+        const hasComposite = indexes.some((idx) => {
+          const fields = (idx.fields || []).map((f) => f.attribute || f.name).filter(Boolean);
+          return idx.unique && fields.length === 2 && fields.includes('userId') && fields.includes('phone');
+        });
+
+        if (!hasComposite) {
+          // Drop legacy single-column unique indexes on phone if they exist
+          for (const idx of indexes) {
+            const fields = (idx.fields || []).map((f) => f.attribute || f.name).filter(Boolean);
+            if (idx.unique && fields.length === 1 && fields[0] === 'phone') {
+              try {
+                await queryInterface.removeIndex('contacts', idx.name);
+                console.log(`✅ Removed legacy unique index on contacts.phone (${idx.name}).`);
+              } catch (removeErr) {
+                console.error(`⚠️ Could not remove index ${idx.name}:`, removeErr.message);
+              }
+            }
+          }
+          await queryInterface.addIndex('contacts', ['userId', 'phone'], {
+            unique: true,
+            name: 'contacts_user_phone_unique'
+          });
+          console.log('✅ Added contacts unique index on (userId, phone).');
+        } else {
+          console.log('✅ contacts unique index (userId, phone) already exists.');
+        }
+      } catch (contactIndexError) {
+        console.error('⚠️ Contact index ensure error:', contactIndexError.message);
+      }
       console.log('✅ Contact table synced (whatsappOptInAt).');
     } catch (contactError) {
       console.error('⚠️  Contact table sync error:', contactError.message);

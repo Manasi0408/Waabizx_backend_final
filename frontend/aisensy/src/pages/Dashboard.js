@@ -8,6 +8,14 @@ import MainSidebarNav from '../components/MainSidebarNav';
 
 function Dashboard() {
   const navigate = useNavigate();
+  const selectedProject = (() => {
+    try {
+      const raw = localStorage.getItem('selectedProject');
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  })();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [notificationDropdownOpen, setNotificationDropdownOpen] = useState(false);
   const [user, setUser] = useState(null);
@@ -482,7 +490,7 @@ function Dashboard() {
                   <>
                     Welcome Back,{' '}
                     <span className="motion-gradient-text inline-block bg-gradient-to-r from-sky-200 via-white to-sky-100 bg-clip-text text-transparent">
-                      {userName}
+                      {selectedProject?.project_name || userName}
                     </span>
                     !
                   </>

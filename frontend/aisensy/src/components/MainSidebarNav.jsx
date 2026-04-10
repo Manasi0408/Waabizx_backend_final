@@ -1,4 +1,16 @@
-import { NavLink } from 'react-router-dom';
+import { useMemo } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
+
+function readSelectedProjectName() {
+  try {
+    const raw = localStorage.getItem('selectedProject');
+    if (!raw) return '';
+    const p = JSON.parse(raw);
+    return String(p?.project_name || p?.name || '').trim();
+  } catch {
+    return '';
+  }
+}
 
 const linkClass = ({ isActive }) =>
   `flex flex-col items-center gap-1 px-2 py-3 rounded-lg transition-all duration-300 ease-out will-change-transform group active:scale-[0.96] [&>svg]:transition-transform [&>svg]:duration-300 [&>svg]:ease-out group-hover:[&>svg]:scale-110 group-hover:[&>svg]:-rotate-6 ${
@@ -164,6 +176,11 @@ const items = [
  * @param {{ navClassName?: string; listClassName?: string }} props
  */
 export default function MainSidebarNav({ navClassName = '', listClassName = 'space-y-1' }) {
+  const location = useLocation();
+  const projectName = useMemo(
+    () => readSelectedProjectName(),
+    [location.pathname, location.key]
+  );
   const navClasses = ['flex', 'h-full', 'min-h-0', 'flex-col', 'overflow-hidden', 'p-2', navClassName].filter(Boolean).join(' ');
   const listClasses = [
     'sidebar-nav-stagger',
@@ -178,6 +195,16 @@ export default function MainSidebarNav({ navClassName = '', listClassName = 'spa
     .join(' ');
   return (
     <nav className={navClasses}>
+      {projectName ? (
+        <div
+          className="shrink-0 border-b border-sky-800/60 px-1.5 py-2 mb-1"
+          title={projectName}
+        >
+          <p className="text-[9px] font-semibold text-sky-200/95 uppercase tracking-wide text-center leading-tight break-words line-clamp-3">
+            {projectName}
+          </p>
+        </div>
+      ) : null}
       <ul className={listClasses}>
         {items.map(({ to, label, icon }) => (
           <li key={to}>

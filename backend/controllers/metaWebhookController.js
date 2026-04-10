@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { WebhookLog, MetaMessage, Contact, Message, InboxMessage, User, WhatsAppAccount, CampaignAudience, Template } = require('../models');
+const { WebhookLog, MetaMessage, Contact, Message, InboxMessage, User, WhatsAppAccount, CampaignAudience, Campaign, Template } = require('../models');
 const { Op } = require('sequelize');
 const socketService = require('../services/socketService');
 const db = require('../config/db'); // MySQL pool for conversations/agent routing
@@ -11,6 +11,22 @@ const OPT_IN_MESSAGE =
   'Thanks! You have been opted in for future marketing messages. You will now receive updates and notifications related to this project.';
 const OPT_OUT_MESSAGE =
   'You have been opted out of your future marketing messages. If you would like to receive messages again, reply APPLY above US/APPLY.';
+
+async function syncCampaignStatsFromAudience(campaignId) {
+  if (!campaignId) return;
+  const [total, sent, delivered, read, failed] = await Promise.all([
+    CampaignAudience.count({ where: { campaignId } }),
+    CampaignAudience.count({ where: { campaignId, status: { [Op.in]: ['sent', 'delivered', 'read'] } } }),
+    CampaignAudience.count({ where: { campaignId, status: { [Op.in]: ['delivered', 'read'] } } }),
+    CampaignAudience.count({ where: { campaignId, status: 'read' } }),
+    CampaignAudience.count({ where: { campaignId, status: 'failed' } })
+  ]);
+
+  await Campaign.update(
+    { total, sent, delivered, read, failed },
+    { where: { id: campaignId } }
+  );
+}
 
 // VERIFY WEBHOOK (for WhatsApp/Meta webhook verification)
 exports.verifyWebhook = (req, res) => {
@@ -132,6 +148,7 @@ exports.handleWebhook = async (req, res) => {
                 if (metaStatus === 'delivered') updateData.deliveredAt = new Date(parseInt(st.timestamp, 10) * 1000 || Date.now());
                 if (metaStatus === 'read') updateData.readAt = new Date(parseInt(st.timestamp, 10) * 1000 || Date.now());
                 await audience.update(updateData);
+                await syncCampaignStatsFromAudience(audience.campaignId);
               }
               const inboxMsg = await InboxMessage.findOne({
                 where: { waMessageId }

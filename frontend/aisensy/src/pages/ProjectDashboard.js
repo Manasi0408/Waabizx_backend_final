@@ -211,14 +211,14 @@ function ProjectDashboard() {
                     try {
                       localStorage.setItem("selectedProject", JSON.stringify(project));
                     } catch (e) {}
-                    navigate("/dashboard", { state: { project } });
+                    navigate("/admin", { state: { project } });
                   }}
                   onKeyDown={(e) => {
                     if (e.key !== "Enter") return;
                     try {
                       localStorage.setItem("selectedProject", JSON.stringify(project));
                     } catch (err) {}
-                    navigate("/dashboard", { state: { project } });
+                    navigate("/admin", { state: { project } });
                   }}
                   className="group relative cursor-pointer overflow-hidden rounded-2xl border border-gray-100/90 bg-white/95 shadow-md shadow-gray-200/25 ring-1 ring-gray-100/80 transition-all duration-300 hover:-translate-y-0.5 hover:border-sky-200/90 hover:shadow-xl hover:shadow-sky-500/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2"
                 >

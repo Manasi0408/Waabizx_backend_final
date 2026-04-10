@@ -186,7 +186,7 @@
 
 
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useNavigate } from 'react-router-dom';
 import { isAuthenticated } from './services/authService';
 import Login from './pages/Login';
@@ -226,9 +226,43 @@ const ProtectedRoute = ({ children }) => {
   return isAuthenticated() ? children : <Navigate to="/login" replace />;
 };
 
+const normalizeRole = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/-/g, "_")
+    .replace(/\s+/g, "_");
+
+const getCurrentUserRole = () => {
+  let role = "";
+  try {
+    // Prefer explicit role key set at login.
+    role = normalizeRole(localStorage.getItem("role"));
+    if (!role) {
+      const raw = localStorage.getItem("user");
+      if (raw) {
+        const user = JSON.parse(raw);
+        role = normalizeRole(user?.role);
+      }
+    }
+  } catch (e) {
+    role = normalizeRole(localStorage.getItem("role"));
+  }
+  return role;
+};
+
+const getDefaultRouteForCurrentUser = () => {
+  const role = getCurrentUserRole();
+
+  if (role === "super_admin" || role === "superadmin") return "/super-admin";
+  if (role === "admin" || role === "manager") return "/project-dashboard";
+  if (role === "agent") return "/agent";
+  return "/project-dashboard";
+};
+
 // Public Route Component
 const PublicRoute = ({ children }) => {
-  return !isAuthenticated() ? children : <Navigate to="/dashboard" replace />;
+  return children;
 };
 
 // Admin-only route: show ProjectDashboard if user role is admin, else redirect to /
@@ -245,25 +279,30 @@ const AdminDashboardRoute = () => {
 };
 
 const SuperAdminDashboardRoute = () => {
-  let isSuperAdmin = false;
-  try {
-    const raw = localStorage.getItem("user");
-    if (raw) {
-      const user = JSON.parse(raw);
-      isSuperAdmin = String(user?.role || "").toLowerCase() === "super_admin";
-    }
-  } catch (e) {}
+  const role = getCurrentUserRole();
+  const isSuperAdmin = role === "super_admin" || role === "superadmin";
   return isSuperAdmin ? <SuperAdminDashboard /> : <Navigate to="/" replace />;
 };
 
 // Agent dashboard: agent or admin with token can access (admin when viewing a project); else redirect to /login
 const AgentDashboardRoute = () => {
   const token = localStorage.getItem("token");
-  const role = (localStorage.getItem("role") || "").toLowerCase();
-  if (token && (role === "agent" || role === "admin")) {
+  const role = getCurrentUserRole();
+  if (token && (role === "agent" || role === "admin" || role === "manager")) {
     return <AgentHomePage />;
   }
-  return <Navigate to="/login" replace />;
+  return <Navigate to={token ? getDefaultRouteForCurrentUser() : "/login"} replace />;
+};
+
+const DashboardRoute = () => {
+  const role = getCurrentUserRole();
+  if (role === "agent") {
+    return <Navigate to="/agent" replace />;
+  }
+  if (role === "super_admin" || role === "superadmin") {
+    return <Navigate to="/super-admin" replace />;
+  }
+  return <Dashboard />;
 };
 
 // Connect WhatsApp — direct OAuth redirect (no SDK). Meta redirects to /meta/callback?code=...&state=clientId
@@ -416,6 +455,27 @@ function ConnectWhatsApp() {
 }
 
 function App() {
+  useEffect(() => {
+    if (window.__projectScopedFetchPatched) return;
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init = {}) => {
+      try {
+        const raw = localStorage.getItem("selectedProject");
+        const selectedProject = raw ? JSON.parse(raw) : null;
+        const projectId = selectedProject?.id;
+        if (projectId != null && String(projectId).trim() !== "") {
+          const headers = new Headers(init.headers || {});
+          if (!headers.has("x-project-id")) {
+            headers.set("x-project-id", String(projectId));
+          }
+          return originalFetch(input, { ...init, headers });
+        }
+      } catch (_) {}
+      return originalFetch(input, init);
+    };
+    window.__projectScopedFetchPatched = true;
+  }, []);
+
   return (
     <Router>
       <Routes>
@@ -460,7 +520,31 @@ function App() {
           path="/dashboard"
           element={
             <ProtectedRoute>
-              <Dashboard />
+              <DashboardRoute />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin-dashboard"
+          element={
+            <ProtectedRoute>
+              <DashboardRoute />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute>
+              <DashboardRoute />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/user-dashboard"
+          element={
+            <ProtectedRoute>
+              <DashboardRoute />
             </ProtectedRoute>
           }
         />
@@ -554,6 +638,30 @@ function App() {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/super-admin-dashboard"
+          element={
+            <ProtectedRoute>
+              <SuperAdminDashboardRoute />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/super-admin"
+          element={
+            <ProtectedRoute>
+              <SuperAdminDashboardRoute />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admins"
+          element={
+            <ProtectedRoute>
+              <SuperAdminDashboardRoute />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="/live-chat"
@@ -599,6 +707,10 @@ function App() {
           path="/agent-dashboard"
           element={<AgentDashboardRoute />}
         />
+        <Route
+          path="/agent"
+          element={<AgentDashboardRoute />}
+        />
 
         <Route
           path="/inbox"
@@ -618,9 +730,8 @@ function App() {
           }
         />
 
-        <Route path="/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
-        <Route path="/agent" element={<ProtectedRoute><AgentDashboard /></ProtectedRoute>} />
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/" element={<Navigate to="/login" replace />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
         <Route path="/agent-chat" element={<AgentChatPage />} />
 
       </Routes>
