@@ -43,7 +43,7 @@ function ProjectDashboard() {
   const count = projects.length;
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden bg-gradient-to-b from-sky-50/90 via-white to-sky-100/50">
+    <div className="relative min-h-screen overflow-x-hidden bg-gradient-to-b from-sky-50 via-white to-sky-100/60">
       <div className="pointer-events-none fixed inset-0 overflow-hidden" aria-hidden>
         <div className="absolute -right-20 -top-28 h-[24rem] w-[24rem] rounded-full bg-sky-400/25 blur-3xl" />
         <div className="absolute -left-28 top-1/4 h-[20rem] w-[20rem] rounded-full bg-blue-500/12 blur-3xl" />
@@ -51,21 +51,24 @@ function ProjectDashboard() {
         <div className="absolute bottom-1/4 left-1/4 h-[14rem] w-[14rem] rounded-full bg-emerald-300/10 blur-3xl" />
       </div>
 
-      <div className="relative mx-auto max-w-[1200px] px-4 py-8 md:px-8 md:py-12 lg:px-10">
+      <div className="relative mx-auto max-w-[1240px] px-4 py-6 md:px-7 md:py-9 lg:px-10">
         {/* Hero */}
-        <header className="motion-enter mb-8 md:mb-12">
-          <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
+        <header className="motion-enter mb-6 md:mb-8">
+          <div className="relative overflow-hidden rounded-3xl border border-white/70 bg-white/75 px-5 py-5 shadow-lg shadow-sky-200/35 ring-1 ring-sky-100/80 backdrop-blur-sm md:px-7 md:py-6">
+            <div className="pointer-events-none absolute right-0 top-0 h-24 w-24 translate-x-8 -translate-y-8 rounded-full bg-sky-300/25 blur-2xl" aria-hidden />
+            <div className="pointer-events-none absolute bottom-0 left-1/3 h-16 w-16 translate-y-5 rounded-full bg-blue-300/20 blur-xl" aria-hidden />
+            <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
             <div className="max-w-xl">
-              <p className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-sky-700 shadow-sm ring-1 ring-sky-100/80 backdrop-blur-sm">
+              <p className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/90 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-sky-700 shadow-sm ring-1 ring-sky-100/90">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50" aria-hidden />
                 Project workspace
               </p>
-              <h1 className="text-3xl font-bold tracking-tight text-gray-900 md:text-4xl">
+              <h1 className="text-3xl font-bold tracking-tight text-gray-900 md:text-[2.35rem]">
                 <span className="bg-gradient-to-r from-gray-900 via-sky-800 to-blue-900 bg-clip-text text-transparent">
                   Welcome back, {user?.name || "there"}
                 </span>
               </h1>
-              <p className="mt-3 text-base leading-relaxed text-gray-600 md:text-[17px]">
+              <p className="mt-2.5 text-sm leading-relaxed text-gray-600 md:text-[16px]">
                 Switch between projects, spin up a new workspace, and jump into your dashboard in one click.
               </p>
               <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -85,12 +88,12 @@ function ProjectDashboard() {
             </div>
 
             <div className="grid w-full max-w-md grid-cols-2 gap-3 sm:max-w-lg lg:w-auto lg:max-w-none lg:shrink-0">
-              <div className="rounded-2xl border border-gray-100/90 bg-white/90 p-4 shadow-lg shadow-gray-200/35 ring-1 ring-gray-100/80 backdrop-blur-sm md:p-5">
+              <div className="rounded-2xl border border-sky-100/80 bg-gradient-to-br from-white via-white to-sky-50/70 p-4 shadow-md shadow-sky-200/35 ring-1 ring-sky-100/70 md:p-5">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400">Projects</p>
                 <p className="mt-1 text-3xl font-bold tabular-nums tracking-tight text-gray-900">{count}</p>
                 <p className="mt-1 text-xs font-medium text-sky-600/90">In your workspace</p>
               </div>
-              <div className="rounded-2xl border border-sky-100/90 bg-gradient-to-br from-sky-500/10 via-white to-blue-600/10 p-4 shadow-lg shadow-sky-200/30 ring-1 ring-sky-100/60 md:p-5">
+              <div className="rounded-2xl border border-blue-100/90 bg-gradient-to-br from-sky-500/10 via-white to-blue-600/15 p-4 shadow-md shadow-blue-200/30 ring-1 ring-blue-100/70 md:p-5">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-sky-800/70">Quick tip</p>
                 <p className="mt-1 text-sm font-semibold leading-snug text-gray-800">
                   Click any card to open that project’s dashboard.
@@ -98,11 +101,12 @@ function ProjectDashboard() {
               </div>
             </div>
           </div>
+          </div>
         </header>
 
         {/* Create Project */}
         <section
-          className="motion-enter motion-delay-1 relative mb-10 overflow-hidden rounded-2xl border border-gray-100/90 bg-white/95 shadow-xl shadow-sky-900/[0.06] ring-1 ring-gray-100/80 backdrop-blur-sm md:mb-12"
+          className="motion-enter motion-delay-1 relative mb-8 overflow-hidden rounded-3xl border border-white/75 bg-white/85 shadow-lg shadow-sky-900/[0.08] ring-1 ring-sky-100/80 backdrop-blur-sm md:mb-10"
           aria-labelledby="create-project-heading"
         >
           <div
@@ -114,7 +118,7 @@ function ProjectDashboard() {
             aria-hidden
           />
 
-          <div className="relative grid gap-8 p-5 md:grid-cols-[1fr_minmax(0,1.15fr)] md:items-center md:gap-10 md:p-8 lg:p-10">
+          <div className="relative grid gap-7 p-5 md:grid-cols-[1fr_minmax(0,1.15fr)] md:items-center md:gap-8 md:p-7 lg:p-8">
             <div>
               <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-500 to-blue-700 text-white shadow-lg shadow-sky-600/30 ring-2 ring-white">
                 <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
@@ -143,7 +147,7 @@ function ProjectDashboard() {
                     if (e.key === "Enter") createProject();
                   }}
                   placeholder="e.g. Acme Retail — WhatsApp"
-                  className="min-h-[48px] w-full rounded-xl border-2 border-gray-200/90 bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-400 focus:border-sky-400 focus:ring-4 focus:ring-sky-500/10"
+                  className="min-h-[48px] w-full rounded-xl border-2 border-sky-100/90 bg-white/95 px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-400 focus:border-sky-400 focus:ring-4 focus:ring-sky-500/10"
                 />
               </div>
               <button
@@ -161,8 +165,8 @@ function ProjectDashboard() {
         </section>
 
         {/* Projects list */}
-        <section className="motion-enter motion-delay-2" aria-labelledby="projects-heading">
-          <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <section className="motion-enter motion-delay-2 rounded-3xl border border-white/75 bg-white/65 p-4 shadow-md shadow-sky-100/30 ring-1 ring-sky-100/70 backdrop-blur-sm md:p-5" aria-labelledby="projects-heading">
+          <div className="mb-5 flex flex-wrap items-end justify-between gap-4 border-b border-sky-100/70 pb-4">
             <div>
               <h2 id="projects-heading" className="text-xl font-bold text-gray-900 md:text-2xl">
                 Your projects
@@ -201,7 +205,7 @@ function ProjectDashboard() {
               </p>
             </div>
           ) : (
-            <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
               {projects.map((project) => (
                 <div
                   key={project.id}
@@ -220,7 +224,7 @@ function ProjectDashboard() {
                     } catch (err) {}
                     navigate("/admin", { state: { project } });
                   }}
-                  className="group relative cursor-pointer overflow-hidden rounded-2xl border border-gray-100/90 bg-white/95 shadow-md shadow-gray-200/25 ring-1 ring-gray-100/80 transition-all duration-300 hover:-translate-y-0.5 hover:border-sky-200/90 hover:shadow-xl hover:shadow-sky-500/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2"
+                  className="group relative w-full cursor-pointer overflow-hidden rounded-2xl border border-gray-100/90 bg-white/95 shadow-md shadow-gray-200/25 ring-1 ring-gray-100/80 transition-all duration-300 hover:-translate-y-0.5 hover:border-sky-200/90 hover:shadow-xl hover:shadow-sky-500/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2"
                 >
                   <div
                     className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-sky-500 via-sky-400 to-blue-600 opacity-90 transition-transform duration-300 group-hover:scale-x-[1.02]"

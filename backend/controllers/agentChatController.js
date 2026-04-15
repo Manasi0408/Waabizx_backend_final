@@ -3,6 +3,7 @@ const { sendText } = require("../services/whatsappService");
 const { Contact } = require("../models");
 const { upsertConversationWithQuota } = require("../services/conversationBillingService");
 const { recordOutboundInboxMessage } = require("../services/outboundInboxService");
+const { getProjectId } = require("../utils/projectScope");
 
 const chatListFields = `id,phone,customer_name,last_message,last_message_time,unread_count,status`;
 
@@ -68,6 +69,7 @@ exports.sendMessage = async (req, res) => {
   try {
     const body = req.body || {};
     const { conversation_id, phone, message } = body;
+    const projectId = getProjectId(req);
 
     if (conversation_id == null || !phone || message == null) {
       return res.status(400).json({
@@ -79,7 +81,9 @@ exports.sendMessage = async (req, res) => {
     // Conversation billing/quota enforcement (24-hour rolling).
     let billingAllowed = true;
     try {
-      const contact = await Contact.findOne({ where: { phone } });
+      const contactWhere = { phone };
+      if (projectId) contactWhere.projectId = projectId;
+      const contact = await Contact.findOne({ where: contactWhere });
       if (contact) {
         const billing = await upsertConversationWithQuota(contact.userId, phone);
         billingAllowed = !!billing.allowed;
@@ -108,7 +112,7 @@ exports.sendMessage = async (req, res) => {
       [message, conversation_id]
     );
 
-    await recordOutboundInboxMessage(phone, message, { status: 'sent' });
+    await recordOutboundInboxMessage(phone, message, { status: 'sent', projectId });
 
     res.json({ success: true });
   } catch (err) {

@@ -137,31 +137,40 @@ const syncDatabase = async () => {
       try {
         const queryInterface = sequelize.getQueryInterface();
         const indexes = await queryInterface.showIndex('contacts');
-        const hasComposite = indexes.some((idx) => {
-          const fields = (idx.fields || []).map((f) => f.attribute || f.name).filter(Boolean);
-          return idx.unique && fields.length === 2 && fields.includes('userId') && fields.includes('phone');
+        const fieldNames = (idx) => (idx.fields || []).map((f) => f.attribute || f.name).filter(Boolean);
+        const hasProjectScopedUnique = indexes.some((idx) => {
+          const fields = fieldNames(idx);
+          return (
+            idx.unique &&
+            fields.length === 3 &&
+            fields.includes('userId') &&
+            fields.includes('phone') &&
+            fields.includes('projectId')
+          );
         });
 
-        if (!hasComposite) {
-          // Drop legacy single-column unique indexes on phone if they exist
+        if (!hasProjectScopedUnique) {
           for (const idx of indexes) {
-            const fields = (idx.fields || []).map((f) => f.attribute || f.name).filter(Boolean);
-            if (idx.unique && fields.length === 1 && fields[0] === 'phone') {
+            const fields = fieldNames(idx);
+            if (!idx.unique || idx.name === 'PRIMARY') continue;
+            const isLegacyPhoneOnly = fields.length === 1 && fields[0] === 'phone';
+            const isLegacyUserPhone = fields.length === 2 && fields.includes('userId') && fields.includes('phone');
+            if (isLegacyPhoneOnly || isLegacyUserPhone) {
               try {
                 await queryInterface.removeIndex('contacts', idx.name);
-                console.log(`✅ Removed legacy unique index on contacts.phone (${idx.name}).`);
+                console.log(`✅ Removed legacy unique index on contacts (${idx.name}).`);
               } catch (removeErr) {
                 console.error(`⚠️ Could not remove index ${idx.name}:`, removeErr.message);
               }
             }
           }
-          await queryInterface.addIndex('contacts', ['userId', 'phone'], {
+          await queryInterface.addIndex('contacts', ['userId', 'phone', 'projectId'], {
             unique: true,
-            name: 'contacts_user_phone_unique'
+            name: 'contacts_user_phone_project_unique'
           });
-          console.log('✅ Added contacts unique index on (userId, phone).');
+          console.log('✅ Added contacts unique index on (userId, phone, projectId).');
         } else {
-          console.log('✅ contacts unique index (userId, phone) already exists.');
+          console.log('✅ contacts unique index (userId, phone, projectId) already exists.');
         }
       } catch (contactIndexError) {
         console.error('⚠️ Contact index ensure error:', contactIndexError.message);
@@ -170,10 +179,110 @@ const syncDatabase = async () => {
     } catch (contactError) {
       console.error('⚠️  Contact table sync error:', contactError.message);
     }
+
+    // Ensure messages table supports project scoping.
+    try {
+      const queryInterface = sequelize.getQueryInterface();
+      const messageTable = await queryInterface.describeTable('messages');
+      if (!messageTable.projectId) {
+        await queryInterface.addColumn('messages', 'projectId', {
+          type: DataTypes.INTEGER,
+          allowNull: true,
+          defaultValue: null
+        });
+        console.log('✅ messages.projectId column added.');
+      } else {
+        console.log('✅ messages.projectId column already exists.');
+      }
+
+      await sequelize.query(`
+        UPDATE messages m
+        JOIN contacts c ON c.id = m.contactId
+        SET m.projectId = c.projectId
+        WHERE m.projectId IS NULL
+          AND c.projectId IS NOT NULL
+      `);
+    } catch (messageProjectError) {
+      console.error('⚠️ messages projectId ensure error:', messageProjectError.message);
+    }
+
+    // Ensure conversations table supports project scoping.
+    try {
+      const queryInterface = sequelize.getQueryInterface();
+      const conversationTable = await queryInterface.describeTable('conversations');
+      if (!conversationTable.project_id) {
+        await queryInterface.addColumn('conversations', 'project_id', {
+          type: DataTypes.INTEGER,
+          allowNull: true,
+          defaultValue: null
+        });
+        console.log('✅ conversations.project_id column added.');
+      } else {
+        console.log('✅ conversations.project_id column already exists.');
+      }
+
+      // Backfill project_id from contacts by phone where possible.
+      await sequelize.query(`
+        UPDATE conversations c
+        JOIN (
+          SELECT phone, MAX(projectId) AS projectId
+          FROM contacts
+          WHERE projectId IS NOT NULL
+          GROUP BY phone
+        ) ct ON ct.phone = c.phone
+        SET c.project_id = ct.projectId
+        WHERE c.project_id IS NULL
+      `);
+
+      const indexes = await queryInterface.showIndex('conversations');
+      const hasUniqueProjectPhone = indexes.some((idx) => {
+        const fields = (idx.fields || []).map((f) => f.attribute || f.name).filter(Boolean);
+        return idx.unique && fields.length === 2 && fields.includes('project_id') && fields.includes('phone');
+      });
+      if (!hasUniqueProjectPhone) {
+        await queryInterface.addIndex('conversations', ['project_id', 'phone'], {
+          unique: true,
+          name: 'conversations_project_phone_unique'
+        });
+        console.log('✅ Added conversations unique key on (project_id, phone).');
+      }
+    } catch (conversationProjectError) {
+      console.error('⚠️ conversations project_id ensure error:', conversationProjectError.message);
+    }
+
     // Ensure ClientWhatsApp (clients_whatsapp) table exists for Meta onboarding
     try {
       await ClientWhatsApp.sync({ force: false, alter: true });
       console.log('✅ ClientWhatsApp table verified/created.');
+      try {
+        const queryInterface = sequelize.getQueryInterface();
+        const cwaTable = await queryInterface.describeTable('clients_whatsapp');
+        if (!cwaTable.phone) {
+          await queryInterface.addColumn('clients_whatsapp', 'phone', {
+            type: DataTypes.STRING(20),
+            allowNull: true
+          });
+        }
+        if (!cwaTable.project_id) {
+          await queryInterface.addColumn('clients_whatsapp', 'project_id', {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: null
+          });
+        }
+        const cwaIndexes = await queryInterface.showIndex('clients_whatsapp');
+        const hasPhoneIdx = cwaIndexes.some((idx) => {
+          const fields = (idx.fields || []).map((f) => f.attribute || f.name).filter(Boolean);
+          return fields.length === 1 && fields[0] === 'phone';
+        });
+        if (!hasPhoneIdx) {
+          await queryInterface.addIndex('clients_whatsapp', ['phone'], {
+            name: 'clients_whatsapp_phone_idx'
+          });
+        }
+      } catch (cwaSchemaErr) {
+        console.error('⚠️ clients_whatsapp schema ensure error:', cwaSchemaErr.message);
+      }
     } catch (clientWaError) {
       console.error('⚠️  ClientWhatsApp table sync error:', clientWaError.message);
     }
@@ -189,6 +298,13 @@ const syncDatabase = async () => {
       console.log('✅ WhatsAppAccount table verified/created.');
     } catch (waAccError) {
       console.error('⚠️  WhatsAppAccount table sync error:', waAccError.message);
+    }
+
+    try {
+      await MetaMessage.sync({ force: false, alter: true });
+      console.log('✅ MetaMessage table synced (project scoping).');
+    } catch (metaMsgSyncError) {
+      console.error('⚠️  MetaMessage table sync error:', metaMsgSyncError.message);
     }
 
     // Ensure CannedMessage table exists

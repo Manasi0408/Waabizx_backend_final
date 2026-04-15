@@ -1,7 +1,8 @@
 const aisensyService = require('../services/aisensyService');
 const { recordOutboundInboxMessage } = require('../services/outboundInboxService');
-const { MetaMessage, Message, Contact, User } = require('../models');
-const { Op } = require('sequelize');
+const { MetaMessage, Message, Contact, User, sequelize } = require('../models');
+const { Op, QueryTypes } = require('sequelize');
+const { requireProjectId, getProjectId } = require('../utils/projectScope');
 
 // Check WhatsApp API key connection
 exports.checkApiKey = async (req, res) => {
@@ -80,9 +81,13 @@ exports.sendMessage = async (req, res) => {
     // Enforce opt-in/out before sending
     const requestingUserId = req.user?.id;
     const normalizedPhone = phone.toString().trim().replace(/^\+/, '');
-    const contactWhere = requestingUserId
-      ? { phone: normalizedPhone, userId: requestingUserId }
-      : { phone: normalizedPhone };
+    const scopedProjectId = getProjectId(req);
+    const contactWhere =
+      requestingUserId && scopedProjectId
+        ? { phone: normalizedPhone, userId: requestingUserId, projectId: scopedProjectId }
+        : requestingUserId
+        ? { phone: normalizedPhone, userId: requestingUserId }
+        : { phone: normalizedPhone };
     const contact = await Contact.findOne({ where: contactWhere });
     const isOptedIn = !!(
       contact &&
@@ -120,7 +125,8 @@ exports.sendMessage = async (req, res) => {
       direction: 'outbound',
       message_type: type || 'text',
       message_text: messageText || '',
-      status: sendStatus
+      status: sendStatus,
+      projectId: getProjectId(req) || null
     });
 
     // Also save to Message table so it appears in inbox
@@ -128,29 +134,22 @@ exports.sendMessage = async (req, res) => {
     const userId = req.user?.id;
     
     if (userId) {
-      // Find or create contact - phone has unique constraint, so find by phone first
-      // If contact exists with different userId, we'll use that contact
-      let contact = await Contact.findOne({
-        where: { phone }
-      });
+      const projectId = scopedProjectId;
+      let contact = projectId
+        ? await Contact.findOne({ where: { phone, userId, projectId } })
+        : await Contact.findOne({ where: { phone, userId } });
 
       if (!contact) {
-        // Contact doesn't exist, create new one
         contact = await Contact.create({
           userId: userId,
+          projectId: projectId || null,
           phone,
-          name: phone, // Default name to phone number
+          name: phone,
           status: 'active'
         });
         console.log('✅ Created new contact (ID:', contact.id + ')');
       } else {
-        // Contact exists - update userId if different (in case phone was shared across users)
-        if (contact.userId !== userId) {
-          await contact.update({ userId: userId });
-          console.log('✅ Updated contact userId (ID:', contact.id + ')');
-        } else {
-          console.log('✅ Contact found (ID:', contact.id + ')');
-        }
+        console.log('✅ Contact found (ID:', contact.id + ')');
       }
 
       // Save message to Message table for inbox
@@ -169,6 +168,7 @@ exports.sendMessage = async (req, res) => {
 
       await recordOutboundInboxMessage(contact.phone, messageText || '', {
         status: sendStatus === 'failed' ? 'failed' : 'sent',
+        projectId: contact.projectId || projectId || null
       });
     } else {
       // Fallback: If no authenticated user, try to find first active user (for backward compatibility)
@@ -218,6 +218,7 @@ exports.sendMessage = async (req, res) => {
 
         await recordOutboundInboxMessage(contact.phone, messageText || '', {
           status: sendStatus === 'failed' ? 'failed' : 'sent',
+          projectId: getProjectId(req) || contact.projectId || null
         });
       }
     }
@@ -235,52 +236,56 @@ exports.sendMessage = async (req, res) => {
 // Get inbound messages (for external systems to retrieve)
 exports.getInboundMessages = async (req, res) => {
   try {
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
+
     const { limit = 10, phone, since, status } = req.query;
 
-    // Build where clause
-    const where = {
-      direction: 'inbound'
-    };
+    const rawLimit = parseInt(limit, 10);
+    const safeLimit =
+      Number.isFinite(rawLimit) && rawLimit >= 1000 ? 5000 : Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 10, 1), 5000);
 
-    // Filter by phone if provided
+    const replacements = { projectId };
+    let extraSql = '';
     if (phone) {
-      where.phone = phone;
+      replacements.phone = String(phone).trim();
+      extraSql += ' AND mm.phone = :phone';
     }
-
-    // Filter by status if provided
     if (status) {
-      where.status = status;
+      replacements.status = String(status).trim();
+      extraSql += ' AND mm.status = :status';
     }
-
-    // Filter by date if provided (messages after this date)
     if (since) {
-      where.created_at = {
-        [Op.gte]: new Date(since)
-      };
+      replacements.since = new Date(since);
+      extraSql += ' AND mm.created_at >= :since';
     }
 
-    // Get inbound messages
-    // Use a very high limit or no limit if limit is very high
-    const queryLimit = parseInt(limit) >= 1000 ? null : parseInt(limit);
-    const messages = await MetaMessage.findAll({
-      where,
-      limit: queryLimit, // null means no limit
-      order: [['created_at', 'DESC']],
-      attributes: [
-        'id',
-        'phone',
-        'direction',
-        'message_type',
-        'message_text',
-        'status',
-        'created_at'
-      ]
-    });
+    const messages = await sequelize.query(
+      `
+      SELECT mm.id, mm.phone, mm.direction, mm.message_type, mm.message_text, mm.status, mm.created_at
+      FROM meta_messages mm
+      WHERE mm.direction = 'inbound'
+        AND (
+          mm.projectId = :projectId
+          OR (
+            mm.projectId IS NULL
+            AND EXISTS (
+              SELECT 1 FROM contacts c
+              WHERE c.phone = mm.phone AND c.projectId = :projectId
+            )
+          )
+        )
+        ${extraSql}
+      ORDER BY mm.created_at DESC
+      LIMIT ${safeLimit}
+      `,
+      { replacements, type: QueryTypes.SELECT }
+    );
 
     res.json({
       success: true,
       count: messages.length,
-      messages: messages.map(msg => ({
+      messages: messages.map((msg) => ({
         id: msg.id,
         phone: msg.phone,
         direction: msg.direction,

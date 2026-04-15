@@ -6,6 +6,7 @@ import ManageAnalyticsPage from "./ManageAnalyticsPage";
 import CannedMessagesPage from "./CannedMessagesPage";
 import OptinManagementPage from "./OptinManagementPage";
 import MainSidebarNav from "../components/MainSidebarNav";
+import AdminHeaderProjectSwitch from "../components/AdminHeaderProjectSwitch";
 
 function agentAvatarGradient(id) {
   const palettes = [
@@ -246,6 +247,7 @@ function ManagePage() {
           </Link>
           <span className="text-gray-300 hidden md:block shrink-0">|</span>
           <h2 className="text-lg font-semibold text-sky-700 hidden md:block tracking-tight">Manage</h2>
+          <AdminHeaderProjectSwitch />
         </div>
         <div className="flex items-center gap-3">
           <button

@@ -5,6 +5,7 @@ import { getProfile, logout, isAuthenticated } from '../services/authService';
 import { getNotifications, markAsRead, markAllAsRead } from '../services/notificationService';
 import { getDashboardStats, getConversationQuota } from '../services/dashboardService';
 import MainSidebarNav from '../components/MainSidebarNav';
+import AdminHeaderProjectSwitch from '../components/AdminHeaderProjectSwitch';
 
 function Dashboard() {
   const navigate = useNavigate();
@@ -286,6 +287,7 @@ function Dashboard() {
           {/* Page Title */}
           <span className="text-gray-300 hidden md:block">|</span>
           <h2 className="text-lg font-semibold text-sky-700 hidden md:block tracking-tight">Dashboard</h2>
+          <AdminHeaderProjectSwitch />
         </div>
         
         {/* Right Side Icons */}

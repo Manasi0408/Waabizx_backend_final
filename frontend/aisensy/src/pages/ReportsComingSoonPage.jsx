@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import MainSidebarNav from "../components/MainSidebarNav";
+import AdminHeaderProjectSwitch from "../components/AdminHeaderProjectSwitch";
 
 export default function ReportsComingSoonPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -170,6 +171,7 @@ export default function ReportsComingSoonPage() {
               <p className="text-xs text-gray-500 truncate">Intervened agents summary</p>
             </div>
           </div>
+          <AdminHeaderProjectSwitch />
         </div>
 
         <div className="flex items-center gap-3">

@@ -12,6 +12,7 @@ import {
   getContactById
 } from '../services/contactService';
 import MainSidebarNav from '../components/MainSidebarNav';
+import AdminHeaderProjectSwitch from '../components/AdminHeaderProjectSwitch';
 
 function Contacts() {
   const navigate = useNavigate();
@@ -390,6 +391,7 @@ function Contacts() {
 
           <span className="text-gray-300 hidden md:block shrink-0">|</span>
           <h2 className="text-lg font-semibold text-sky-700 hidden md:block tracking-tight">Contacts</h2>
+          <AdminHeaderProjectSwitch />
         </div>
 
         <div className="flex items-center gap-3 md:gap-4">

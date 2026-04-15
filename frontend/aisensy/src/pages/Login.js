@@ -18,6 +18,7 @@ const AUTH_MARQUEE_TAGS = [
 ];
 
 function Login() {
+  const TERMS_FILE_HREF = '/Terms-and-Conditions-Waabizx.pdf';
   const navigate = useNavigate();
   const location = useLocation();
   const [formData, setFormData] = useState({
@@ -28,6 +29,7 @@ function Login() {
   const showPasswordResetMessage = !!location.state?.passwordReset;
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   const [forgotOpen, setForgotOpen] = useState(location.pathname === '/login/forgot-password');
   const [forgotStep, setForgotStep] = useState('request'); // request | reset
@@ -511,7 +513,33 @@ function Login() {
                     />
                   </div>
 
-                  <div className="flex items-center justify-end">
+                  <div className="rounded-xl border border-gray-200/90 bg-gray-50/70 px-3 py-2.5">
+                    <label className="flex items-start gap-2.5 text-[11px] leading-relaxed text-gray-600 sm:text-xs">
+                      <input
+                        type="checkbox"
+                        checked={acceptedTerms}
+                        onChange={(e) => setAcceptedTerms(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 rounded border-gray-300 text-sky-600 focus:ring-sky-500"
+                      />
+                      <span>
+                        By signing in, you agree to our{' '}
+                        <a
+                          href={TERMS_FILE_HREF}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            window.open(TERMS_FILE_HREF, '_blank', 'noopener,noreferrer');
+                          }}
+                          className="font-semibold text-sky-700 hover:text-sky-800 underline underline-offset-2"
+                        >
+                          Terms of Service
+                        </a>.
+                      </span>
+                    </label>
+                  </div>
+
+                  <div className="flex items-center justify-end pt-0.5">
                     <button
                       type="button"
                       className="text-sm font-semibold text-sky-600 transition-colors hover:text-sky-800"
@@ -527,7 +555,7 @@ function Login() {
 
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || !acceptedTerms}
                     className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 py-3 text-sm font-bold text-white shadow-lg shadow-sky-600/25 transition-all hover:from-sky-500 hover:to-blue-500 hover:shadow-xl active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none sm:min-h-[48px] sm:py-3.5"
                   >
                     {loading ? (
@@ -683,13 +711,6 @@ function Login() {
                 )}
               </div>
             </div>
-            {!forgotOpen && (
-              <p className="mt-4 text-center text-[10px] leading-relaxed text-gray-500 sm:mt-5 sm:text-xs">
-                By signing in, you agree to our{' '}
-                <span className="font-medium text-gray-600">Terms of Service</span> and{' '}
-                <span className="font-medium text-gray-600">Privacy Policy</span>
-              </p>
-            )}
           </div>
         </main>
       </div>

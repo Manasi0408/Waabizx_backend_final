@@ -273,6 +273,7 @@ const reportsRoutes = require('./routes/reportsRoutes');
 
 // Initialize Express app
 const app = express();
+app.set('trust proxy', 1);
 
 
 // ✅ ✅ FIXED CORS (ONLY THIS PART CHANGED)

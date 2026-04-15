@@ -4,7 +4,7 @@ import InfiniteScroll from 'react-infinite-scroll-component';
 import { getProfile, isAuthenticated, logout } from '../services/authService';
 import { getNotifications, markAsRead as markNotificationAsRead, markAllAsRead } from '../services/notificationService';
 import { getInboxList, getContactMessages, sendMessage, markAsRead } from '../services/inboxService';
-import { getInboundMessages, sendMetaMessage, getAllMetaMessages, getWebhookLogs } from '../services/metaMessageService';
+import { sendMetaMessage, getAllMetaMessages, getWebhookLogs } from '../services/metaMessageService';
 import { initializeSocket, disconnectSocket, joinContactRoom, leaveContactRoom, sendTypingStart, sendTypingStop, onSocketEvent, offSocketEvent } from '../services/socketService';
 import { deleteMessage, forwardMessage, addReaction, searchMessages, getPaginatedMessages, sendTemplateMessage } from '../services/messageService';
 import { uploadMedia, sendMediaMessage } from '../services/mediaService';
@@ -14,6 +14,21 @@ import { getTemplates } from '../services/templateService';
 import { getManagerRequesting, assignChatToAgent, interveneByPhone } from '../api/chatApi';
 import axios from '../api/axios';
 import MainSidebarNav from '../components/MainSidebarNav';
+import AdminHeaderProjectSwitch from '../components/AdminHeaderProjectSwitch';
+
+const API_BASE = 'https://wabizx.techwhizzc.com/';
+const INTERVENED_STORAGE_KEY = 'inboxIntervenedPhones';
+
+const readSelectedProjectId = () => {
+  try {
+    const raw = localStorage.getItem('selectedProject');
+    if (!raw) return '';
+    const id = JSON.parse(raw)?.id;
+    return id != null && String(id).trim() !== '' ? String(id) : '';
+  } catch {
+    return '';
+  }
+};
 
 function Inbox() {
   const navigate = useNavigate();
@@ -69,6 +84,7 @@ function Inbox() {
   const notificationRef = useRef(null);
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
+  const [activeProjectId, setActiveProjectId] = useState(readSelectedProjectId);
   const typingTimeoutRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -493,6 +509,25 @@ function Inbox() {
     }
   }, [notificationDropdownOpen]);
 
+  useEffect(() => {
+    const syncProject = () => {
+      const next = readSelectedProjectId();
+      setActiveProjectId((prev) => (prev !== next ? next : prev));
+    };
+    const timer = setInterval(syncProject, 800);
+    window.addEventListener('storage', syncProject);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('storage', syncProject);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    setSelectedContact(null);
+    setMessages([]);
+  }, [activeProjectId]);
+
   // Track last message timestamp for polling
   const lastMessageTimeRef = useRef(null);
   
@@ -500,6 +535,54 @@ function Inbox() {
   const fetchingInboxRef = useRef(false);
   const fetchingInboundRef = useRef(false);
   const fetchingMessagesRef = useRef(false);
+
+  const fetchInboundListFallback = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return [];
+
+    const selectedProjectRaw = localStorage.getItem('selectedProject');
+    const selectedProject = selectedProjectRaw ? JSON.parse(selectedProjectRaw) : null;
+    const projectId = selectedProject?.id;
+
+    const headers = { 'Authorization': `Bearer ${token}` };
+    if (projectId != null && String(projectId).trim() !== '') {
+      headers['x-project-id'] = String(projectId);
+    }
+
+    const res = await fetch(`${API_BASE}messages/inbound?limit=500`, { method: 'GET', headers });
+    const text = await res.text();
+    if (!res.ok) return [];
+    if (text.trim().startsWith('<!doctype') || text.trim().startsWith('<html')) return [];
+
+    const parsed = JSON.parse(text);
+    const rows = parsed?.messages || parsed?.data || [];
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+
+    const byPhone = new Map();
+    rows.forEach((m) => {
+      const phone = String(m?.phone || '').trim();
+      if (!phone) return;
+      const ts = m?.received_at || m?.created_at || new Date().toISOString();
+      const existing = byPhone.get(phone);
+      if (!existing || new Date(ts).getTime() > new Date(existing.lastMessageTime).getTime()) {
+        byPhone.set(phone, {
+          contactId: null,
+          phone,
+          name: phone,
+          email: null,
+          status: 'active',
+          lastContacted: ts,
+          whatsappOptInAt: null,
+          lastMessage: m?.text || '',
+          lastMessageTime: ts,
+          unreadCount: 0,
+          chatStatus: null
+        });
+      }
+    });
+
+    return Array.from(byPhone.values()).sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
+  };
   
   // Fetch inbox list
   const fetchInboxList = async (showLoading = false) => {
@@ -514,24 +597,47 @@ function Inbox() {
         setLoadingInbox(true);
       }
       const data = await getInboxList();
-      console.log('Inbox list fetched:', data?.length || 0, 'contacts');
+      let finalList = data || [];
+      if (finalList.length === 0) {
+        finalList = await fetchInboundListFallback();
+        if (finalList.length > 0) {
+          console.log('Inbox fallback from inbound messages:', finalList.length, 'contacts');
+        }
+      }
+      // Normalize shape so the rest of inbox code can always use `id`.
+      finalList = (finalList || []).map((item) => ({
+        ...item,
+        id: item?.id ?? item?.contactId ?? null
+      }));
+      console.log('Inbox list fetched:', finalList?.length || 0, 'contacts');
 
       // Persist intervene state from backend chat status across refresh/navigation.
       const nextIntervened = {};
-      (data || []).forEach((item) => {
+      (finalList || []).forEach((item) => {
         const status = String(item?.chatStatus || '').toLowerCase();
         if (status === 'intervened' && item?.phone) {
           nextIntervened[item.phone] = true;
         }
       });
-      setIntervenedPhones(nextIntervened);
+      let persistedIntervened = {};
+      try {
+        const rawIntervened = localStorage.getItem(INTERVENED_STORAGE_KEY);
+        persistedIntervened = rawIntervened ? JSON.parse(rawIntervened) : {};
+      } catch (e) {
+        persistedIntervened = {};
+      }
+      const mergedIntervened = { ...(persistedIntervened || {}), ...nextIntervened };
+      setIntervenedPhones(mergedIntervened);
+      try {
+        localStorage.setItem(INTERVENED_STORAGE_KEY, JSON.stringify(mergedIntervened));
+      } catch (e) {}
       
       // Only update state if data actually changed (prevent unnecessary re-renders)
       setInboxList(prev => {
         const prevStr = JSON.stringify(prev);
-        const newStr = JSON.stringify(data || []);
+        const newStr = JSON.stringify(finalList || []);
         if (prevStr !== newStr) {
-          return data || [];
+          return finalList || [];
         }
         return prev; // Return same reference if no change
       });
@@ -557,8 +663,38 @@ function Inbox() {
     try {
       fetchingInboundRef.current = true;
       const since = lastMessageTimeRef.current ? new Date(lastMessageTimeRef.current).toISOString() : null;
-      // Fetch more messages to ensure we get all new ones
-      const inboundMessages = await getInboundMessages(500, null, since); // Increased limit
+      const token = localStorage.getItem('token');
+      const selectedProjectRaw = localStorage.getItem('selectedProject');
+      const selectedProject = selectedProjectRaw ? JSON.parse(selectedProjectRaw) : null;
+      const projectId = selectedProject?.id;
+
+      // Correct backend route is /messages/inbound (not /api/inbound-messages)
+      let url = `${API_BASE}messages/inbound?limit=500`;
+      if (since) {
+        url += `&since=${encodeURIComponent(since)}`;
+      }
+
+      const headers = {
+        'Authorization': `Bearer ${token}`
+      };
+      if (projectId != null && String(projectId).trim() !== '') {
+        headers['x-project-id'] = String(projectId);
+      }
+
+      const res = await fetch(url, { method: 'GET', headers });
+      const text = await res.text();
+      console.log(text);
+
+      if (!res.ok) {
+        throw new Error(`Failed to fetch inbound messages (${res.status})`);
+      }
+
+      if (text.trim().startsWith('<!doctype') || text.trim().startsWith('<html')) {
+        throw new Error('Inbound endpoint returned HTML (wrong route/domain)');
+      }
+
+      const data = JSON.parse(text);
+      const inboundMessages = data?.data || data?.messages || [];
       
       if (inboundMessages && inboundMessages.length > 0) {
         // Update last message time
@@ -592,23 +728,20 @@ function Inbox() {
   };
 
   useEffect(() => {
-    if (!loading && isAuthenticated()) {
-      // Initial load with loading state
-      fetchInboxList(true);
-      fetchInboundMessages();
-      
-      // Refresh inbox list every 15 seconds (background refresh, no loading state)
-      const inboxInterval = setInterval(() => fetchInboxList(false), 15000);
-      
-      // Poll for inbound messages every 10 seconds (reduced frequency)
-      const inboundInterval = setInterval(fetchInboundMessages, 10000);
-      
-      return () => {
-        clearInterval(inboxInterval);
-        clearInterval(inboundInterval);
-      };
+    if (loading || !isAuthenticated() || !activeProjectId) {
+      return undefined;
     }
-  }, [loading]);
+    fetchInboxList(true);
+    fetchInboundMessages();
+
+    const inboxInterval = setInterval(() => fetchInboxList(false), 15000);
+    const inboundInterval = setInterval(fetchInboundMessages, 10000);
+
+    return () => {
+      clearInterval(inboxInterval);
+      clearInterval(inboundInterval);
+    };
+  }, [loading, activeProjectId]);
 
   // Fetch messages for selected contact - integrates data from Message, MetaMessage, and WebhookLogs
   const fetchMessages = async (phone, showLoading = true) => {
@@ -691,6 +824,42 @@ function Inbox() {
       } catch (error) {
         console.error('Error fetching meta messages:', error);
       }
+
+      // Fallback: if merged sources are still empty, use inbound API for this phone
+      // so right panel still shows conversation for phone-only entries.
+      if (!allMessages || allMessages.length === 0) {
+        try {
+          const token = localStorage.getItem('token');
+          const selectedProjectRaw = localStorage.getItem('selectedProject');
+          const selectedProject = selectedProjectRaw ? JSON.parse(selectedProjectRaw) : null;
+          const projectId = selectedProject?.id;
+          const headers = { Authorization: `Bearer ${token}` };
+          if (projectId != null && String(projectId).trim() !== '') {
+            headers['x-project-id'] = String(projectId);
+          }
+          const fallbackUrl = `${API_BASE}messages/inbound?limit=500&phone=${encodeURIComponent(phone)}`;
+          const fallbackRes = await fetch(fallbackUrl, { method: 'GET', headers });
+          const fallbackText = await fallbackRes.text();
+          if (fallbackRes.ok && !fallbackText.trim().startsWith('<')) {
+            const fallbackData = JSON.parse(fallbackText);
+            const fallbackRows = fallbackData?.messages || fallbackData?.data || [];
+            if (Array.isArray(fallbackRows) && fallbackRows.length > 0) {
+              allMessages = fallbackRows.map((m) => ({
+                id: `inbound_${m.id}`,
+                content: m.text || '',
+                type: 'incoming',
+                status: m.status === 'received' ? 'delivered' : (m.status || 'delivered'),
+                sentAt: m.received_at,
+                createdAt: m.received_at,
+                source: 'inbound_fallback',
+                phone
+              }));
+            }
+          }
+        } catch (fallbackError) {
+          console.error('Error fetching inbound fallback messages:', fallbackError);
+        }
+      }
       
       // 3. Get webhook logs for this phone (for debugging/display)
       // Fetch all webhook logs (increased limit)
@@ -751,14 +920,26 @@ function Inbox() {
         let processedMessages = allMessages.map((msg, index) => {
           // Ensure content field exists (convert from message field if needed)
           const messageContent = msg.content || msg.message || '';
+          const resolvedTimestamp = msg.sentAt || msg.createdAt || msg.timestamp || msg.received_at || msg.created_at || null;
           
           if (!msg.id) {
             // Generate a unique ID if missing
-            const timestamp = new Date(msg.sentAt || msg.createdAt || Date.now()).getTime();
+            const timestamp = new Date(resolvedTimestamp || Date.now()).getTime();
             const source = msg.source || 'message';
-            return { ...msg, id: `${source}_${timestamp}_${index}`, content: messageContent };
+            return {
+              ...msg,
+              id: `${source}_${timestamp}_${index}`,
+              content: messageContent,
+              sentAt: msg.sentAt || resolvedTimestamp,
+              createdAt: msg.createdAt || resolvedTimestamp
+            };
           }
-          return { ...msg, content: messageContent };
+          return {
+            ...msg,
+            content: messageContent,
+            sentAt: msg.sentAt || resolvedTimestamp,
+            createdAt: msg.createdAt || resolvedTimestamp
+          };
         });
         
         // Combine fetched messages with optimistic messages
@@ -1105,12 +1286,18 @@ function Inbox() {
   const formatMessageTime = (dateString) => {
     if (!dateString) return '';
     const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) return '';
     const now = new Date();
     const isToday = date.toDateString() === now.toDateString();
     if (isToday) {
       return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     }
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+
+  const getMessageTimestamp = (msg) => {
+    if (!msg || typeof msg !== 'object') return null;
+    return msg.sentAt || msg.createdAt || msg.timestamp || msg.received_at || msg.created_at || msg.updatedAt || null;
   };
 
   const handleSendMessage = async (e, overrideText) => {
@@ -1222,7 +1409,19 @@ function Inbox() {
 
   const handleContactSelect = (contact) => {
     console.log('Contact clicked:', contact);
-    setSelectedContact(contact);
+    const selectedPhone = contact?.phone;
+    if (selectedPhone) {
+      // Optimistically clear unread badge for opened chat.
+      setInboxList((prev) =>
+        (prev || []).map((c) =>
+          c?.phone === selectedPhone ? { ...c, unreadCount: 0 } : c
+        )
+      );
+    }
+    setSelectedContact({
+      ...contact,
+      id: contact?.id ?? contact?.contactId ?? null
+    });
     setMessages([]);
     setCurrentPage(1);
     setHasMoreMessages(true);
@@ -1284,16 +1483,92 @@ function Inbox() {
     });
   };
 
-  const sendInterveneQuickItem = async (insertValue) => {
+  const getTemplateParamValue = (idx, contact) => {
+    const phone = String(contact?.phone || '').trim();
+    const normalizedPhone = phone.replace(/^\+/, '');
+    const contactName = String(contact?.name || '').trim();
+    const email = String(contact?.email || '').trim();
+    const defaultName = contactName && contactName !== phone ? contactName : (normalizedPhone || 'Customer');
+    const valueMap = {
+      1: defaultName,
+      2: normalizedPhone || defaultName,
+      3: email || defaultName,
+      4: normalizedPhone ? normalizedPhone.slice(-4) : defaultName,
+    };
+    return String(valueMap[idx] || defaultName);
+  };
+
+  const buildTemplateParams = (item, contact) => {
+    const bodyText = String(item?.insertValue || '');
+    const explicitParams = Array.isArray(item?.templateParams) ? item.templateParams.filter((v) => String(v || '').trim() !== '') : [];
+    const matches = [...bodyText.matchAll(/\{\{\s*(\d+)\s*\}\}/g)];
+    const indices = [...new Set(matches.map((m) => Number(m[1])).filter((n) => Number.isFinite(n) && n > 0))].sort((a, b) => a - b);
+    if (indices.length === 0) {
+      return explicitParams;
+    }
+    // Meta requires exact number of params matching placeholders.
+    return indices.map((idx, arrPos) => String(explicitParams[arrPos] || getTemplateParamValue(idx, contact)));
+  };
+
+  const sendInterveneQuickItem = async (item) => {
     setInterveneQuickPickerOpen(false);
     setSelectedInterveneCannedId("");
     setSelectedInterveneTemplateId("");
     try {
+      // Template option: send as real approved template (not plain text insert).
+      if (item && typeof item === 'object' && item.mode === 'template') {
+        const phone = selectedContact?.phone;
+        if (!phone) return;
+        const templateName = String(item.templateName || '').trim();
+        if (!templateName) {
+          throw new Error('Template name is missing');
+        }
+        const nowIso = new Date().toISOString();
+        const optimisticTemplateMessage = {
+          id: `template_quick_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          content: resolveTemplatePlaceholders(String(item?.insertValue || ''), selectedContact),
+          type: 'outgoing',
+          status: 'sent',
+          sentAt: nowIso,
+          createdAt: nowIso,
+          source: 'optimistic',
+          isTemplate: true,
+          templateName,
+          phone,
+          contactId: selectedContact?.id || null
+        };
+        setMessages((prev) => {
+          const updated = [...prev, optimisticTemplateMessage].sort((a, b) => {
+            const dateA = new Date(getMessageTimestamp(a) || 0);
+            const dateB = new Date(getMessageTimestamp(b) || 0);
+            return dateA - dateB;
+          });
+          return updated;
+        });
+        await sendTemplateMessage(
+          phone,
+          templateName,
+          item.templateLanguage || 'en_US',
+          buildTemplateParams(item, selectedContact)
+        );
+        fetchInboxList(false);
+        setTimeout(() => {
+          if (selectedContact?.phone) {
+            fetchMessages(selectedContact.phone, false).catch(() => {});
+          }
+        }, 500);
+        return;
+      }
+
+      const insertValue = typeof item === 'string' ? item : String(item?.insertValue || '');
       const resolvedText = resolveTemplatePlaceholders(insertValue, selectedContact);
       await handleSendMessage(null, resolvedText);
     } catch (e) {
       // handleSendMessage already alerts/optimistic-updates; keep UI stable
       setInterveneQuickPickerOpen(false);
+      if (e?.message) {
+        alert(`Failed to send: ${e.message}`);
+      }
     }
   };
 
@@ -1335,6 +1610,10 @@ function Inbox() {
           id: `local_${t.id}`,
           label: String(t?.name || "Template"),
           insertValue: String(t?.content || ""),
+          mode: 'template',
+          templateName: String(t?.name || ''),
+          templateLanguage: String(t?.language || 'en_US'),
+          templateParams: Array.isArray(t?.variables) ? t.variables : [],
         }));
 
       const metaTemplates = Array.isArray(metaRes?.data?.templates) ? metaRes.data.templates : [];
@@ -1347,6 +1626,10 @@ function Inbox() {
             id: `meta_${t.id}`,
             label: String(t?.name || "Meta Template"),
             insertValue: String(bodyText),
+            mode: 'template',
+            templateName: String(t?.name || ''),
+            templateLanguage: String(t?.language || t?.language_code || 'en_US'),
+            templateParams: [],
           };
         });
 
@@ -1886,6 +2169,7 @@ function Inbox() {
 
           <span className="text-gray-300 hidden md:block shrink-0">|</span>
           <h2 className="text-lg font-semibold text-sky-700 hidden md:block tracking-tight">Inbox</h2>
+          <AdminHeaderProjectSwitch />
         </div>
 
         <div className="flex items-center gap-3 md:gap-4">
@@ -2051,7 +2335,7 @@ function Inbox() {
             <div className="absolute bottom-0 -left-20 w-[18rem] h-[18rem] bg-blue-400/20 motion-page-blob motion-page-blob--b" />
           </div>
           {/* Left Panel - Chat List */}
-          <div className="relative z-[1] w-80 border-r border-gray-200/90 bg-white/95 backdrop-blur-sm flex flex-col shadow-sm shadow-gray-200/25 ring-1 ring-gray-100/60">
+          <div className="relative z-[1] w-80 border-r border-sky-100/80 bg-white/95 backdrop-blur-sm flex flex-col shadow-[0_12px_32px_-18px_rgba(14,165,233,0.45)] ring-1 ring-sky-100/50">
             {/* Requesting (admin/manager): unassigned conversations — assign to agent */}
             {/* {isAdminOrManager && (
               <div className="border-b border-gray-200 bg-amber-50/80">
@@ -2105,7 +2389,7 @@ function Inbox() {
               </div>
             )} */}
             {/* Search Bar */}
-            <div className="p-4 border-b border-gray-200/80 bg-gradient-to-b from-white to-sky-50/20">
+            <div className="p-4 border-b border-sky-100/70 bg-gradient-to-b from-white to-sky-50/40">
               <div className="relative">
                 <input
                   type="text"
@@ -2121,7 +2405,7 @@ function Inbox() {
             </div>
 
             {/* Chat List */}
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto bg-gradient-to-b from-white via-sky-50/20 to-sky-100/20">
               {loadingInbox ? (
                 <div className="p-8 text-center motion-enter">
                   <div className="animate-spin rounded-full h-8 w-8 border-2 border-sky-200 border-t-sky-600 mx-auto" />
@@ -2136,20 +2420,20 @@ function Inbox() {
                   <p className="text-sm text-gray-500">Start a conversation by sending a message</p>
                 </div>
               ) : (
-                <div className="motion-stagger-children divide-y divide-gray-100/90">
+                <div className="motion-stagger-children px-2 py-2 space-y-2">
                   {filteredInboxList.map((contact) => (
                     <button
                       type="button"
                       key={contact.contactId || `contact_${contact.phone}`}
                       onClick={() => handleContactSelect(contact)}
-                      className={`w-full p-4 text-left transition-all duration-200 hover:bg-sky-50/60 active:scale-[0.99] ${
+                      className={`w-full p-4 text-left rounded-2xl transition-all duration-200 hover:bg-sky-50/85 hover:shadow-sm active:scale-[0.99] ${
                         selectedContact?.phone === contact.phone
-                          ? 'bg-sky-50/90 border-l-4 border-sky-600 shadow-inner shadow-sky-100/50'
-                          : 'border-l-4 border-transparent'
+                          ? 'bg-gradient-to-r from-sky-50 to-white border border-sky-200/80 shadow-[0_8px_22px_-16px_rgba(2,132,199,0.6)]'
+                          : 'border border-transparent hover:border-sky-100/80'
                       }`}
                     >
                       <div className="flex items-start gap-3">
-                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 flex items-center justify-center flex-shrink-0 shadow-md shadow-sky-500/25 ring-2 ring-white">
+                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 flex items-center justify-center flex-shrink-0 shadow-md shadow-sky-500/25 ring-2 ring-white">
                           <span className="text-white font-semibold text-lg">
                             {contact.name?.charAt(0).toUpperCase() || contact.phone.charAt(0)}
                           </span>
@@ -2190,11 +2474,11 @@ function Inbox() {
           </div>
 
           {/* Right Panel - Chat Window */}
-          <div className="relative z-[1] flex-1 flex flex-col min-w-0 bg-sky-50/40 backdrop-blur-[1px]">
+          <div className="relative z-[1] flex-1 flex flex-col min-w-0 bg-gradient-to-b from-sky-50/35 via-white/40 to-sky-100/35 backdrop-blur-[1px]">
             {selectedContact ? (
               <>
                 {/* Chat Header */}
-                <div className="relative bg-white/95 backdrop-blur-md border-b border-gray-200/80 px-6 py-4 flex items-center justify-between shadow-sm shadow-gray-200/30">
+                <div className="relative bg-white/95 backdrop-blur-md border-b border-sky-100/80 px-6 py-4 flex items-center justify-between shadow-[0_8px_20px_-14px_rgba(14,165,233,0.5)]">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     <div className="relative shrink-0">
                       <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 flex items-center justify-center shadow-md shadow-sky-500/25 ring-2 ring-white">
@@ -2298,7 +2582,7 @@ function Inbox() {
 
                 {/* Message search bar */}
                 {isSearching && (
-                  <div className="bg-white/95 backdrop-blur-sm border-b border-gray-200/80 px-6 py-3 shadow-sm">
+                  <div className="bg-white/95 backdrop-blur-sm border-b border-sky-100/80 px-6 py-3 shadow-sm">
                     <div className="relative">
                       <input
                         type="text"
@@ -2332,7 +2616,7 @@ function Inbox() {
 
                 {/* Typing indicator */}
                 {typingContacts[selectedContact.id] && (
-                  <div className="bg-white/90 backdrop-blur-sm border-b border-gray-200/80 px-6 py-2 motion-enter">
+                  <div className="bg-white/90 backdrop-blur-sm border-b border-sky-100/80 px-6 py-2 motion-enter">
                     <p className="text-sm text-sky-700/80 italic">
                       {selectedContact.name || selectedContact.phone} is typing...
                     </p>
@@ -2342,7 +2626,7 @@ function Inbox() {
                 {/* Messages Area */}
                 <div
                   ref={chatContainerRef}
-                  className="flex-1 overflow-y-auto p-4 md:p-6 space-y-0 bg-gradient-to-b from-transparent via-sky-50/20 to-sky-100/30"
+                  className="flex-1 overflow-y-auto p-4 md:p-6 space-y-0 bg-[radial-gradient(ellipse_at_top,rgba(186,230,253,0.26),transparent_48%),radial-gradient(ellipse_at_bottom,rgba(191,219,254,0.2),transparent_55%)]"
                 >
                   {messages.length === 0 ? (
                     <div className="flex items-center justify-center h-full min-h-[200px]">
@@ -2378,10 +2662,10 @@ function Inbox() {
                             }}
                           >
                             <div
-                              className={`max-w-xs lg:max-w-md px-4 py-2 rounded-2xl relative shadow-sm transition-shadow duration-200 ${
+                              className={`max-w-xs lg:max-w-md px-4 py-2.5 rounded-2xl relative shadow-sm transition-shadow duration-200 ${
                                 message.type === 'outgoing'
-                                  ? 'bg-gradient-to-br from-sky-600 to-sky-700 text-white shadow-sky-600/25'
-                                  : 'bg-white/95 text-gray-900 border border-gray-200/90 backdrop-blur-sm shadow-gray-200/40'
+                                  ? 'bg-gradient-to-br from-sky-600 to-blue-700 text-white shadow-[0_10px_22px_-14px_rgba(2,132,199,0.9)]'
+                                  : 'bg-white/96 text-gray-900 border border-sky-100/90 backdrop-blur-sm shadow-[0_10px_22px_-16px_rgba(148,163,184,0.55)]'
                               }`}
                             >
                               {/* Reply indicator */}
@@ -2478,7 +2762,7 @@ function Inbox() {
                               <div className={`flex items-center justify-between gap-2 mt-1 ${
                                 message.type === 'outgoing' ? 'text-sky-100' : 'text-gray-500'
                               }`}>
-                                <p className="text-xs">{formatMessageTime(message.sentAt || message.createdAt)}</p>
+                                <p className="text-xs">{formatMessageTime(getMessageTimestamp(message))}</p>
                                 <div className="flex items-center gap-1">
                                   {message.type === 'outgoing' && (
                                     <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
@@ -2582,7 +2866,13 @@ function Inbox() {
                           } catch (e) {}
                           const result = await interveneByPhone(phone, selectedAgentId);
                           if (result?.success) {
-                            setIntervenedPhones((prev) => ({ ...prev, [phone]: true }));
+                            setIntervenedPhones((prev) => {
+                              const next = { ...prev, [phone]: true };
+                              try {
+                                localStorage.setItem(INTERVENED_STORAGE_KEY, JSON.stringify(next));
+                              } catch (e) {}
+                              return next;
+                            });
                             fetchInboxList(false);
                           } else {
                             alert(result?.message || 'Failed to intervene');
@@ -2599,7 +2889,7 @@ function Inbox() {
                 )}
 
                 {/* Message Input: when intervened show Send; otherwise Intervene (admin) when chat has customer message or is selected */}
-                <div className="bg-white/95 backdrop-blur-md border-t border-gray-200/80 px-6 py-4 flex justify-center items-center flex-wrap gap-2 shadow-[0_-4px_24px_-8px_rgba(14,165,233,0.12)]">
+                <div className="bg-white/95 backdrop-blur-md border-t border-sky-100/80 px-6 py-4 flex justify-center items-center flex-wrap gap-2 shadow-[0_-8px_28px_-12px_rgba(14,165,233,0.18)]">
                   {selectedContact?.phone && (
                     (intervenedPhones[selectedContact.phone] ||
                       String(selectedContact?.chatStatus || '').toLowerCase() === 'intervened') ? (
@@ -2663,7 +2953,7 @@ function Inbox() {
                                               <button
                                                 key={opt.id}
                                                 type="button"
-                                                onClick={() => sendInterveneQuickItem(opt.insertValue)}
+                                                onClick={() => sendInterveneQuickItem(opt)}
                                                 disabled={sending}
                                                 className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-sky-50/80 border-2 border-gray-100 hover:border-sky-200/80 disabled:opacity-50 disabled:cursor-not-allowed transition"
                                               >
@@ -2692,7 +2982,7 @@ function Inbox() {
                                               <button
                                                 key={opt.id}
                                                 type="button"
-                                                onClick={() => sendInterveneQuickItem(opt.insertValue)}
+                                                onClick={() => sendInterveneQuickItem(opt)}
                                                 disabled={sending}
                                                 className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-sky-50/80 border-2 border-gray-100 hover:border-sky-200/80 disabled:opacity-50 disabled:cursor-not-allowed transition"
                                               >
@@ -2744,7 +3034,13 @@ function Inbox() {
                             } catch (e) {}
                             const result = await interveneByPhone(phone, selectedAgentId);
                             if (result?.success) {
-                              setIntervenedPhones((prev) => ({ ...prev, [phone]: true }));
+                              setIntervenedPhones((prev) => {
+                                const next = { ...prev, [phone]: true };
+                                try {
+                                  localStorage.setItem(INTERVENED_STORAGE_KEY, JSON.stringify(next));
+                                } catch (e) {}
+                                return next;
+                              });
                               fetchInboxList(false);
                             } else {
                               alert(result?.message || 'Failed to intervene');

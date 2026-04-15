@@ -3,12 +3,15 @@ const { Message, Contact, User, InboxMessage, Template } = require('../models');
 const { Op } = require('sequelize');
 const socketService = require('../services/socketService');
 const { upsertConversationWithQuota } = require('../services/conversationBillingService');
+const { requireProjectId } = require('../utils/projectScope');
 
 // Send message via Meta API
 exports.sendMessage = async (req, res) => {
   try {
     // Get userId from authenticated user (middleware sets req.user)
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     
     // Log incoming payload for debugging
     console.log('📥 Inbox payload received:', JSON.stringify(req.body, null, 2));
@@ -79,10 +82,11 @@ exports.sendMessage = async (req, res) => {
       // Still allow the request to proceed - save to DB but mark as failed
       // This allows testing the endpoint structure even without API credentials
       // Find or create contact
-      let contact = await Contact.findOne({ where: { phone, userId } });
+      let contact = await Contact.findOne({ where: { phone, userId, projectId } });
       if (!contact) {
         contact = await Contact.create({
           userId,
+          projectId,
           phone,
           name: phone,
           status: 'active'
@@ -94,6 +98,7 @@ exports.sendMessage = async (req, res) => {
       const saved = await InboxMessage.create({
         contactId: contact.id,
         userId,
+        projectId,
         direction: "outgoing",
         message,
         type: "text",
@@ -116,7 +121,7 @@ exports.sendMessage = async (req, res) => {
     }
 
     // Find contact - try exact match first, then normalize and try again
-    let contact = await Contact.findOne({ where: { phone, userId } });
+    let contact = await Contact.findOne({ where: { phone, userId, projectId } });
     
     // If not found, try creating contact automatically (for new conversations)
     if (!contact) {
@@ -124,6 +129,7 @@ exports.sendMessage = async (req, res) => {
       try {
         contact = await Contact.create({
           userId,
+          projectId,
           phone,
           name: phone, // Default name to phone number
           status: 'active'
@@ -156,6 +162,7 @@ exports.sendMessage = async (req, res) => {
         await InboxMessage.create({
           contactId: contact.id,
           userId,
+          projectId,
           direction: "outgoing",
           message,
           type: "text",
@@ -253,6 +260,7 @@ exports.sendMessage = async (req, res) => {
         const failedMessage = await InboxMessage.create({
           contactId: contact.id,
           userId,
+          projectId,
           direction: "outgoing",
           message,
           type: "text",
@@ -296,6 +304,7 @@ exports.sendMessage = async (req, res) => {
       saved = await InboxMessage.create({
         contactId: contact.id,
         userId,
+        projectId,
         direction: "outgoing",
         message,
         type: "text",
@@ -346,6 +355,7 @@ exports.sendMessage = async (req, res) => {
   } catch (err) {
     console.error("Outgoing Error:", err);
     console.error("Error Stack:", err.stack);
+    const projectId = Number(req?.projectId) || null;
     
     // Try to get contact for error handling
     let contact = null;
@@ -353,7 +363,7 @@ exports.sendMessage = async (req, res) => {
       const phone = req.body?.phone;
       const userId = req.user?.id;
       if (phone && userId) {
-        contact = await Contact.findOne({ where: { phone, userId } });
+        contact = await Contact.findOne({ where: { phone, userId, projectId } });
       }
     } catch (contactError) {
       console.error("Error finding contact for error log:", contactError);
@@ -364,6 +374,7 @@ exports.sendMessage = async (req, res) => {
       await InboxMessage.create({
         contactId: contact?.id || null,
         userId: req.user?.id || null,
+        projectId,
         direction: "outgoing",
         message: req.body?.message || "Unknown",
         type: "text",
@@ -614,6 +625,8 @@ exports.sendTemplate = async (req, res) => {
   try {
     // Get userId from authenticated user
     const userId = req.user.id;
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
     const { phone, templateName, templateLanguage = "en_US", templateParams = [] } = req.body;
     
     // Get template content from database
@@ -653,12 +666,13 @@ exports.sendTemplate = async (req, res) => {
     }
 
     // Find or create contact (for template messages, we can create new contacts)
-    let contact = await Contact.findOne({ where: { phone, userId } });
+    let contact = await Contact.findOne({ where: { phone, userId, projectId } });
 
     if (!contact) {
       // Create new contact if doesn't exist (for template messages)
       contact = await Contact.create({
         userId,
+        projectId,
         phone,
         name: phone, // Default name to phone number
         status: 'active'
@@ -676,6 +690,7 @@ exports.sendTemplate = async (req, res) => {
         await InboxMessage.create({
           contactId: contact.id,
           userId,
+          projectId,
           direction: "outgoing",
           message: `Template: ${templateName}`,
           type: "text",
@@ -707,6 +722,7 @@ exports.sendTemplate = async (req, res) => {
         await InboxMessage.create({
           contactId: contact.id,
           userId,
+          projectId,
           direction: "outgoing",
           message: `Template: ${templateName}`,
           type: "text",
@@ -788,6 +804,7 @@ exports.sendTemplate = async (req, res) => {
         await InboxMessage.create({
           contactId: contact.id,
           userId,
+          projectId,
           direction: "outgoing",
           message: `Template: ${templateName}`,
           type: "text",
@@ -836,6 +853,7 @@ exports.sendTemplate = async (req, res) => {
       savedMessage = await InboxMessage.create({
         contactId: contact.id,
         userId: userId,
+        projectId,
         direction: "outgoing",
         message: templateContent, // Use actual template content instead of "Template: templateName"
         type: "text",
@@ -871,6 +889,7 @@ exports.sendTemplate = async (req, res) => {
           savedMessage = await InboxMessage.create({
             contactId: contact.id,
             userId: userId,
+            projectId,
             direction: "outgoing",
             message: templateContent, // Use actual template content
             type: "text",

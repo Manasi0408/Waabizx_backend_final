@@ -26,18 +26,27 @@ const getProjectIdFromReq = (req) => {
   const n = Number(req?.projectId || req?.user?.projectId || null);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
+const phoneVariants = (phone) => {
+  const raw = String(phone || "").trim();
+  if (!raw) return [];
+  const noPlus = raw.replace(/^\+/, "");
+  return [...new Set([raw, noPlus, `+${noPlus}`])];
+};
+
+const resolveDefaultProjectId = async () => {
+  try {
+    const [rows] = await db.query("SELECT id FROM projects ORDER BY id ASC LIMIT 1");
+    if (Array.isArray(rows) && rows.length > 0 && rows[0].id != null) return Number(rows[0].id);
+  } catch (e) {}
+  return 1;
+};
 
 const assertConversationInProject = async (conversationId, projectId) => {
   const [rows] = await db.query(
     `SELECT c.id
      FROM conversations c
      WHERE c.id = ?
-       AND EXISTS (
-         SELECT 1
-         FROM contacts ct
-         WHERE ct.phone = c.phone
-           AND ct.projectId = ?
-       )
+       AND c.project_id = ?
      LIMIT 1`,
     [conversationId, projectId]
   );
@@ -48,18 +57,46 @@ exports.receiveMessage = async (req, res) => {
   try {
     const phone = req.body.phone;
     const message = req.body.message;
+    const variants = phoneVariants(phone);
+    let projectId = Number(req.body.project_id || req.body.projectId || 0) || null;
+
+    if (!projectId && variants.length > 0) {
+      const [existingProjectRows] = await db.query(
+        `SELECT project_id FROM conversations
+         WHERE phone IN (?) AND project_id IS NOT NULL
+         ORDER BY id DESC LIMIT 1`,
+        [variants]
+      );
+      if (Array.isArray(existingProjectRows) && existingProjectRows.length > 0) {
+        projectId = Number(existingProjectRows[0].project_id);
+      }
+    }
+    if (!projectId && variants.length > 0) {
+      const [mappingRows] = await db.query(
+        `SELECT project_id FROM clients_whatsapp
+         WHERE phone IN (?) AND project_id IS NOT NULL
+         ORDER BY id DESC LIMIT 1`,
+        [variants]
+      );
+      if (Array.isArray(mappingRows) && mappingRows.length > 0) {
+        projectId = Number(mappingRows[0].project_id);
+      }
+    }
+    if (!projectId) {
+      projectId = await resolveDefaultProjectId();
+    }
 
     const [rows] = await db.query(
-      "SELECT * FROM conversations WHERE phone=? AND status!='closed'",
-      [phone]
+      "SELECT * FROM conversations WHERE phone=? AND project_id=? AND status!='closed'",
+      [phone, projectId]
     );
 
     let convId;
 
     if (rows.length === 0) {
       const [result] = await db.query(
-        "INSERT INTO conversations (phone, customer_name, last_message, status) VALUES (?, ?, ?, 'requesting')",
-        [phone, phone, message]
+        "INSERT INTO conversations (phone, customer_name, last_message, status, project_id) VALUES (?, ?, ?, 'requesting', ?)",
+        [phone, phone, message, projectId]
       );
       convId = result.insertId;
     } else {
@@ -86,7 +123,7 @@ exports.receiveMessage = async (req, res) => {
           optOutKeywords.some((k) => normalizedText.includes(k));
         const isOptInKeyword = normalizedText === 'START' || normalizedText === 'YES' || normalizedText === 'HI';
 
-        let contact = await Contact.findOne({ where: { phone: normalizedPhone } });
+        let contact = await Contact.findOne({ where: { phone: normalizedPhone, projectId } });
         const wasNewContact = !contact;
         const oldOptedOut = contact
           ? contact.status === "unsubscribed" || !contact.whatsappOptInAt
@@ -100,7 +137,7 @@ exports.receiveMessage = async (req, res) => {
           if (firstUser) {
             contact = await Contact.create({
               userId: firstUser.id,
-              projectId: firstUser.projectId || null,
+              projectId: projectId || firstUser.projectId || null,
               phone: normalizedPhone,
               name: normalizedPhone,
               status: isOptOut ? "unsubscribed" : "active",
@@ -143,6 +180,7 @@ exports.receiveMessage = async (req, res) => {
           await InboxMessage.create({
             contactId: contact.id,
             userId: contact.userId,
+            projectId,
             direction: "incoming",
             message: message,
             type: "text",
@@ -184,11 +222,7 @@ exports.getManagerRequesting = async (req, res) => {
        FROM conversations c
        WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'requesting'
          AND c.agent_id IS NULL
-         AND EXISTS (
-           SELECT 1 FROM contacts ct
-           WHERE ct.phone = c.phone
-             AND ct.projectId = ?
-         )
+         AND c.project_id = ?
        ORDER BY last_message_time DESC`,
       [projectId]
     );
@@ -212,11 +246,7 @@ exports.getAgentRequesting = async (req, res) => {
       `SELECT ${conversationListFields}
        FROM conversations c
        WHERE c.agent_id = ? AND LOWER(TRIM(COALESCE(c.status,''))) = 'requesting'
-         AND EXISTS (
-           SELECT 1 FROM contacts ct
-           WHERE ct.phone = c.phone
-             AND ct.projectId = ?
-         )
+         AND c.project_id = ?
        ORDER BY last_message_time DESC`,
       [agentId, projectId]
     );
@@ -235,13 +265,30 @@ exports.getManagerConversations = async (req, res) => {
     const [rows] = await db.query(
       `SELECT ${conversationListFields}
        FROM conversations c
-       WHERE EXISTS (
-         SELECT 1 FROM contacts ct
-         WHERE ct.phone = c.phone
-           AND ct.projectId = ?
-       )
+       WHERE c.project_id = ?
        ORDER BY last_message_time DESC`
       , [projectId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Generic: fetch chats only for a project_id
+exports.getConversationsByProject = async (req, res) => {
+  try {
+    const projectId = Number(req.params.projectId || 0);
+    if (!Number.isInteger(projectId) || projectId <= 0) {
+      return res.status(400).json({ success: false, error: "Valid projectId is required" });
+    }
+    const [rows] = await db.query(
+      `SELECT ${conversationListFields}
+       FROM conversations c
+       WHERE c.project_id = ?
+       ORDER BY last_message_time DESC`,
+      [projectId]
     );
     res.json(rows);
   } catch (err) {
@@ -277,11 +324,7 @@ exports.getAgentConversations = async (req, res) => {
        FROM conversations c
        WHERE c.agent_id = ?
          AND LOWER(TRIM(COALESCE(c.status,''))) IN ('active','intervened')
-         AND EXISTS (
-           SELECT 1 FROM contacts ct
-           WHERE ct.phone = c.phone
-             AND ct.projectId = ?
-         )
+         AND c.project_id = ?
        ORDER BY last_message_time DESC`,
       [agentId, projectId]
     );
@@ -311,11 +354,7 @@ exports.getRequestingChats = async (req, res) => {
          FROM conversations c
          WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'requesting'
            AND c.agent_id = ?
-           AND EXISTS (
-                 SELECT 1 FROM contacts ct
-                 WHERE ct.phone = c.phone
-                   AND ct.projectId = ?
-               )
+          AND c.project_id = ?
            AND TIMESTAMPDIFF(
                  HOUR,
                  (SELECT MAX(m.created_at) FROM message m WHERE m.conversation_id = c.id),
@@ -332,11 +371,7 @@ exports.getRequestingChats = async (req, res) => {
          FROM conversations c
          WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'requesting'
            AND c.agent_id IS NULL
-           AND EXISTS (
-                 SELECT 1 FROM contacts ct
-                 WHERE ct.phone = c.phone
-                   AND ct.projectId = ?
-               )
+          AND c.project_id = ?
            AND TIMESTAMPDIFF(
                  HOUR,
                  (SELECT MAX(m.created_at) FROM message m WHERE m.conversation_id = c.id),
@@ -370,11 +405,7 @@ exports.getActiveChats = async (req, res) => {
          FROM conversations c
          WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'active'
            AND c.agent_id = ?
-           AND EXISTS (
-             SELECT 1 FROM contacts ct
-             WHERE ct.phone = c.phone
-               AND ct.projectId = ?
-           )
+          AND c.project_id = ?
          ORDER BY last_message_time DESC`,
         [userId, projectId]
       );
@@ -384,11 +415,7 @@ exports.getActiveChats = async (req, res) => {
         `SELECT ${conversationListFields}
          FROM conversations c
          WHERE LOWER(TRIM(COALESCE(c.status,''))) = 'active'
-           AND EXISTS (
-             SELECT 1 FROM contacts ct
-             WHERE ct.phone = c.phone
-               AND ct.projectId = ?
-           )
+          AND c.project_id = ?
          ORDER BY last_message_time DESC`,
         [projectId]
       );
@@ -415,11 +442,7 @@ exports.getIntervenedChats = async (req, res) => {
         `SELECT ${conversationListFields}
          FROM conversations c
          WHERE c.agent_id = ?
-           AND EXISTS (
-             SELECT 1 FROM contacts ct
-             WHERE ct.phone = c.phone
-               AND ct.projectId = ?
-           )
+           AND c.project_id = ?
            AND (
              LOWER(TRIM(COALESCE(c.status,''))) = 'intervened'
              OR (
@@ -440,11 +463,7 @@ exports.getIntervenedChats = async (req, res) => {
       [rows] = await db.query(
         `SELECT ${conversationListFields}
          FROM conversations c
-         WHERE EXISTS (
-             SELECT 1 FROM contacts ct
-             WHERE ct.phone = c.phone
-               AND ct.projectId = ?
-           )
+         WHERE c.project_id = ?
            AND (
              LOWER(TRIM(COALESCE(c.status,''))) = 'intervened'
              OR (
@@ -667,7 +686,7 @@ exports.sendMessage = async (req, res) => {
     // If WhatsApp sending fails, we still store the message in DB.
     try {
       if (phone && message) {
-        const contact = await Contact.findOne({ where: { phone } });
+        const contact = await Contact.findOne({ where: { phone, projectId } });
         const isOptedIn = !!(
           contact &&
           contact.status !== 'unsubscribed' &&
@@ -705,7 +724,7 @@ exports.sendMessage = async (req, res) => {
       [message, conversation_id]
     );
 
-    await recordOutboundInboxMessage(phone, message, { status: 'sent' });
+    await recordOutboundInboxMessage(phone, message, { status: 'sent', projectId });
 
     const [messageRows] = await db.query(
       "SELECT id, conversation_id, sender, message, created_at FROM message WHERE conversation_id = ? ORDER BY created_at ASC",
@@ -790,7 +809,7 @@ exports.sendTemplateMessage = async (req, res) => {
     // Send approved template via WhatsApp template API
     try {
       if (phone) {
-        const contact = await Contact.findOne({ where: { phone } });
+        const contact = await Contact.findOne({ where: { phone, projectId } });
         const isOptedIn = !!(
           contact &&
           contact.status !== 'unsubscribed' &&
@@ -826,7 +845,7 @@ exports.sendTemplateMessage = async (req, res) => {
     );
     await db.query("UPDATE conversations SET last_message = ? WHERE id = ?", [textToStore, conversation_id]);
 
-    await recordOutboundInboxMessage(phone, textToStore, { status: 'sent' });
+    await recordOutboundInboxMessage(phone, textToStore, { status: 'sent', projectId });
 
     const [messageRows] = await db.query(
       "SELECT id, conversation_id, sender, message, created_at FROM message WHERE conversation_id = ? ORDER BY created_at ASC",

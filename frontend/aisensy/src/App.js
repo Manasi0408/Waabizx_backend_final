@@ -203,6 +203,7 @@ import Inbox from './pages/Inbox';
 import Flows from './pages/Flows';
 import Chatbot from './components/Chatbot';
 import MainSidebarNav from './components/MainSidebarNav';
+import AdminHeaderProjectSwitch from './components/AdminHeaderProjectSwitch';
 import ProjectLogin from './pages/ProjectLogin';
 import ProjectDashboard from './pages/ProjectDashboard';
 import AgentHomePage from './pages/AgentHomePage';
@@ -388,6 +389,7 @@ function ConnectWhatsApp() {
 
           <span className="text-gray-300 hidden md:block shrink-0">|</span>
           <h2 className="text-lg font-semibold text-sky-700 hidden md:block tracking-tight">Connect WhatsApp</h2>
+          <AdminHeaderProjectSwitch />
         </div>
 
         <button

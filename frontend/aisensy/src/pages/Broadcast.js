@@ -4,6 +4,7 @@ import { getProfile, isAuthenticated, logout } from '../services/authService';
 import { getNotifications, markAsRead, markAllAsRead } from '../services/notificationService';
 import { getTemplates, getMetaTemplates } from '../services/templateService';
 import MainSidebarNav from '../components/MainSidebarNav';
+import AdminHeaderProjectSwitch from '../components/AdminHeaderProjectSwitch';
 import {
   uploadCSV,
   getBroadcastContacts,
@@ -434,6 +435,7 @@ function Broadcast() {
 
           <span className="text-gray-300 hidden md:block">|</span>
           <h2 className="text-lg font-semibold text-sky-700 hidden md:block tracking-tight">Broadcast</h2>
+          <AdminHeaderProjectSwitch />
         </div>
 
         <div className="flex items-center gap-3 md:gap-4">

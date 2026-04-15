@@ -24,6 +24,7 @@ router.get(
 );
 
 // Existing filtered lists (can be used by manager views)
+router.get("/conversations/:projectId", protect, chatController.getConversationsByProject);
 router.get("/requesting", protect, chatController.getRequestingChats);
 router.get("/active", protect, chatController.getActiveChats);
 router.get("/intervened", protect, chatController.getIntervenedChats);

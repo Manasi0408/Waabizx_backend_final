@@ -6,6 +6,13 @@ const { upsertConversationWithQuota } = require('../services/conversationBilling
 const { requireProjectId } = require('../utils/projectScope');
 
 const isAgentRole = (r) => (r || '').toString().toLowerCase() === 'agent';
+const isProjectWideInboxRole = (r) => ['agent', 'admin', 'manager', 'super_admin'].includes((r || '').toString().toLowerCase());
+const phoneVariants = (phone) => {
+  const raw = String(phone || '').trim();
+  if (!raw) return [];
+  const noPlus = raw.replace(/^\+/, '');
+  return [...new Set([raw, noPlus, `+${noPlus}`])];
+};
 
 // Get inbox chat list - one row per contact with last message and unread count
 // Includes contacts from Message table AND meta_messages table
@@ -16,13 +23,17 @@ exports.getInboxList = async (req, res) => {
     const projectId = requireProjectId(req, res);
     if (!projectId) return;
     const role = (req.user.role || '').toString().toLowerCase();
-    const agentSeesAll = isAgentRole(role);
+    const agentSeesAll = isProjectWideInboxRole(role);
     const contactTableName = Contact.tableName;
     const messageTableName = Message.tableName;
     const metaMessageTableName = MetaMessage.tableName;
+    const inboxMessageTableName = InboxMessage.tableName;
 
     const userFilter = agentSeesAll ? '' : 'AND c.userId = :userId';
     const replacements = agentSeesAll ? { projectId } : { userId, projectId };
+
+    const mmScoped = (alias) =>
+      `(${alias}.projectId = :projectId OR (${alias}.projectId IS NULL AND EXISTS (SELECT 1 FROM \`${contactTableName}\` c_mm_sc WHERE c_mm_sc.phone = ${alias}.phone AND c_mm_sc.projectId = :projectId)))`;
 
     const inboxList = await sequelize.query(`
       SELECT DISTINCT
@@ -39,9 +50,16 @@ exports.getInboxList = async (req, res) => {
            WHERE m.contactId = c.id 
            ORDER BY m.sentAt DESC 
            LIMIT 1),
+          (SELECT im.message
+           FROM \`${inboxMessageTableName}\` im
+           WHERE im.contactId = c.id
+             AND im.projectId = :projectId
+           ORDER BY im.timestamp DESC
+           LIMIT 1),
           (SELECT mm.message_text 
            FROM \`${metaMessageTableName}\` mm 
            WHERE mm.phone = c.phone 
+             AND ${mmScoped('mm')}
            ORDER BY mm.created_at DESC 
            LIMIT 1),
           ''
@@ -52,9 +70,16 @@ exports.getInboxList = async (req, res) => {
            WHERE m.contactId = c.id 
            ORDER BY m.sentAt DESC 
            LIMIT 1),
+          (SELECT im.timestamp
+           FROM \`${inboxMessageTableName}\` im
+           WHERE im.contactId = c.id
+             AND im.projectId = :projectId
+           ORDER BY im.timestamp DESC
+           LIMIT 1),
           (SELECT mm.created_at 
            FROM \`${metaMessageTableName}\` mm 
            WHERE mm.phone = c.phone 
+             AND ${mmScoped('mm')}
            ORDER BY mm.created_at DESC 
            LIMIT 1)
         ) as lastMessageTime,
@@ -64,6 +89,13 @@ exports.getInboxList = async (req, res) => {
           WHERE m.contactId = c.id 
             AND m.type = 'incoming' 
             AND m.status != 'read'
+        ) + (
+          SELECT COUNT(*)
+          FROM \`${inboxMessageTableName}\` im
+          WHERE im.contactId = c.id
+            AND im.projectId = :projectId
+            AND im.direction = 'incoming'
+            AND im.status != 'read'
         ) as unreadCount,
         (
           SELECT conv.status
@@ -75,7 +107,15 @@ exports.getInboxList = async (req, res) => {
         ) as chatStatus
       FROM \`${contactTableName}\` c
       WHERE 1=1 ${userFilter}
-        AND c.projectId = :projectId
+        AND (
+          c.projectId = :projectId
+          OR EXISTS (
+            SELECT 1
+            FROM \`${inboxMessageTableName}\` im_scope
+            WHERE im_scope.contactId = c.id
+              AND im_scope.projectId = :projectId
+          )
+        )
         AND (
           EXISTS (
             SELECT 1 
@@ -83,9 +123,16 @@ exports.getInboxList = async (req, res) => {
             WHERE m.contactId = c.id
           )
           OR EXISTS (
+            SELECT 1
+            FROM \`${inboxMessageTableName}\` im
+            WHERE im.contactId = c.id
+              AND im.projectId = :projectId
+          )
+          OR EXISTS (
             SELECT 1 
             FROM \`${metaMessageTableName}\` mm 
             WHERE mm.phone = c.phone
+              AND ${mmScoped('mm')}
           )
         )
       ORDER BY lastMessageTime DESC
@@ -106,6 +153,7 @@ exports.getInboxList = async (req, res) => {
         (SELECT mm2.message_text 
          FROM \`${metaMessageTableName}\` mm2 
          WHERE mm2.phone = mm.phone 
+           AND ${mmScoped('mm2')}
          ORDER BY mm2.created_at DESC 
          LIMIT 1) as lastMessage,
         MAX(mm.created_at) as lastMessageTime,
@@ -119,7 +167,7 @@ exports.getInboxList = async (req, res) => {
           LIMIT 1
         ) as chatStatus
       FROM \`${metaMessageTableName}\` mm
-      ${agentSeesAll ? 'WHERE EXISTS (SELECT 1 FROM `' + contactTableName + '` c2 WHERE c2.phone = mm.phone AND c2.projectId = :projectId)' : 'WHERE NOT EXISTS (SELECT 1 FROM `' + contactTableName + '` c2 WHERE c2.phone = mm.phone AND c2.userId = :userId AND c2.projectId = :projectId) AND EXISTS (SELECT 1 FROM `' + contactTableName + '` c3 WHERE c3.phone = mm.phone AND c3.projectId = :projectId)'}
+      ${agentSeesAll ? 'WHERE EXISTS (SELECT 1 FROM `' + contactTableName + '` c2 WHERE c2.phone = mm.phone AND c2.projectId = :projectId) AND (' + mmScoped('mm') + ')' : 'WHERE NOT EXISTS (SELECT 1 FROM `' + contactTableName + '` c2 WHERE c2.phone = mm.phone AND c2.userId = :userId AND c2.projectId = :projectId) AND EXISTS (SELECT 1 FROM `' + contactTableName + '` c3 WHERE c3.phone = mm.phone AND c3.projectId = :projectId) AND (' + mmScoped('mm') + ')'}
       GROUP BY mm.phone
       ORDER BY lastMessageTime DESC
     `, {
@@ -183,7 +231,7 @@ exports.getContactMessages = async (req, res) => {
     const projectId = requireProjectId(req, res);
     if (!projectId) return;
     const role = (req.user.role || '').toString().toLowerCase();
-    const agentSeesAll = isAgentRole(role);
+    const agentSeesAll = isProjectWideInboxRole(role);
     // Decode phone number - handle both encoded and non-encoded formats
     let phone = req.params.phone;
     try {
@@ -192,13 +240,57 @@ exports.getContactMessages = async (req, res) => {
       phone = req.params.phone;
     }
     phone = phone.replace(/%2B/g, '+');
+    const variants = phoneVariants(phone);
+    const normalizedPhone = variants[0] || phone;
 
-    const contactWhere = agentSeesAll ? { phone, projectId } : { phone, userId, projectId };
-    const contact = await Contact.findOne({
-      where: contactWhere
-    });
+    let contactWhere = agentSeesAll
+      ? { phone: { [Op.in]: variants }, projectId }
+      : { phone: { [Op.in]: variants }, userId, projectId };
+    let contact = await Contact.findOne({ where: contactWhere });
+
+    // Fallback: contact may have null/old projectId while messages are correctly project-scoped.
+    if (!contact) {
+      contactWhere = agentSeesAll ? { phone: { [Op.in]: variants } } : { phone: { [Op.in]: variants }, userId };
+      contact = await Contact.findOne({ where: contactWhere });
+      if (contact) {
+        const hasProjectScopedInboxMessages = await InboxMessage.count({
+          where: {
+            contactId: contact.id,
+            projectId
+          }
+        });
+        if (!hasProjectScopedInboxMessages) {
+          contact = null;
+        }
+      }
+    }
 
     if (!contact) {
+      // Project may have only meta/webhook rows initially (no Contact yet).
+      // Return synthetic contact so frontend can continue loading meta messages without 404.
+      const hasScopedMetaMessages = await MetaMessage.count({
+        where: {
+          phone: { [Op.in]: variants },
+          [Op.or]: [
+            { projectId },
+            { projectId: null }
+          ]
+        }
+      });
+      if (hasScopedMetaMessages > 0) {
+        return res.json({
+          success: true,
+          contact: {
+            id: null,
+            phone: normalizedPhone,
+            name: normalizedPhone,
+            email: null,
+            status: 'active',
+            whatsappOptInAt: null
+          },
+          messages: []
+        });
+      }
       return res.status(404).json({
         success: false,
         message: 'Contact not found'
@@ -321,34 +413,47 @@ exports.sendMessage = async (req, res) => {
 
     // Normalize phone number (remove spaces, dashes, but keep country code)
     const normalizedPhone = to.toString().trim().replace(/[\s\-\(\)]/g, '');
+    const variants = phoneVariants(normalizedPhone);
 
     // 1️⃣ Ensure contact exists - phone has unique constraint, so find by phone first
     // Then update userId if different (contact might exist for different user)
     let contact = await Contact.findOne({
-      where: { phone: normalizedPhone, projectId }
+      where: { phone: { [Op.in]: variants }, projectId }
     });
 
+    // Legacy: one row per (userId, phone) with projectId unset — attach to this project once.
     if (!contact) {
-      // Contact doesn't exist, create new one
-      contact = await Contact.create({
-        userId: userId,
-        projectId,
-        phone: normalizedPhone,
-        name: normalizedPhone, // Default name to phone number
-        status: 'active'
+      contact = await Contact.findOne({
+        where: { phone: { [Op.in]: variants }, userId, projectId: null }
       });
-      console.log('✅ Created new contact (ID:', contact.id + ')');
-    } else {
-      // Contact exists - update userId if different (in case phone was shared across users)
-      const oldUserId = contact.userId;
-      if (contact.userId !== userId || contact.projectId !== projectId) {
-        await contact.update({ userId: userId, projectId });
-        // Reload contact to get updated data
+      if (contact) {
+        await contact.update({ projectId });
         await contact.reload();
-        console.log('✅ Updated contact userId (ID:', contact.id + ', old userId:', oldUserId + ', new userId:', userId + ')');
-      } else {
-        console.log('✅ Contact found (ID:', contact.id + ')');
+        console.log('✅ Migrated legacy contact to project (ID:', contact.id + ')');
       }
+    }
+
+    if (!contact) {
+      try {
+        contact = await Contact.create({
+          userId: userId,
+          projectId,
+          phone: normalizedPhone,
+          name: normalizedPhone,
+          status: 'active'
+        });
+        console.log('✅ Created new contact (ID:', contact.id + ')');
+      } catch (createErr) {
+        // Race-safe fallback for duplicate create attempts.
+        if (createErr?.name === 'SequelizeUniqueConstraintError' || /Validation error/i.test(createErr?.message || '')) {
+          contact = await Contact.findOne({
+            where: { phone: { [Op.in]: variants }, projectId }
+          });
+        }
+        if (!contact) throw createErr;
+      }
+    } else {
+      console.log('✅ Contact found (ID:', contact.id + ')');
     }
 
     // Enforce opt-in/out before sending
@@ -359,6 +464,7 @@ exports.sendMessage = async (req, res) => {
     if (!isOptedIn) {
       const message = await Message.create({
         contactId: contact.id,
+        projectId,
         content: messageText,
         type: 'outgoing',
         status: 'failed',
@@ -425,6 +531,7 @@ exports.sendMessage = async (req, res) => {
     // 2️⃣ Save message first (will update with waMessageId after API call)
     const message = await Message.create({
       contactId: contact.id,
+      projectId,
       content: messageText,
       type: 'outgoing',
       status: 'sent', // Will be updated based on API result
@@ -611,6 +718,8 @@ exports.markAsRead = async (req, res) => {
     const userId = req.user.id;
     const projectId = requireProjectId(req, res);
     if (!projectId) return;
+    const role = (req.user.role || '').toString().toLowerCase();
+    const projectWide = isProjectWideInboxRole(role);
     // Decode phone number - handle both encoded and non-encoded formats
     let phone = req.params.phone;
     try {
@@ -623,31 +732,33 @@ exports.markAsRead = async (req, res) => {
     // Also handle %2B which is encoded +
     phone = phone.replace(/%2B/g, '+');
 
-    // Find contact by phone and userId
-    const contact = await Contact.findOne({
+    const variants = phoneVariants(phone);
+    // Find all matching contacts by phone+project (legacy duplicates can exist).
+    const contacts = await Contact.findAll({
       where: {
-        phone,
-        userId,
+        phone: { [Op.in]: variants },
+        ...(projectWide ? {} : { userId }),
         projectId
       }
     });
 
-    if (!contact) {
+    if (!contacts || contacts.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'Contact not found'
       });
     }
+    const contactIds = contacts.map((c) => c.id);
 
-    // Update all incoming messages that are not read
-    const [updatedCount] = await Message.update(
+    // Update all incoming Message rows that are not read
+    const [updatedMessageCount] = await Message.update(
       {
         status: 'read',
         readAt: new Date()
       },
       {
         where: {
-          contactId: contact.id,
+          contactId: { [Op.in]: contactIds },
           type: 'incoming',
           status: {
             [Op.ne]: 'read'
@@ -655,6 +766,25 @@ exports.markAsRead = async (req, res) => {
         }
       }
     );
+
+    // Update all incoming InboxMessage rows that are not read
+    const [updatedInboxMessageCount] = await InboxMessage.update(
+      {
+        status: 'read'
+      },
+      {
+        where: {
+          contactId: { [Op.in]: contactIds },
+          projectId,
+          direction: 'incoming',
+          status: {
+            [Op.ne]: 'read'
+          }
+        }
+      }
+    );
+
+    const updatedCount = (Number(updatedMessageCount) || 0) + (Number(updatedInboxMessageCount) || 0);
 
     res.json({
       success: true,

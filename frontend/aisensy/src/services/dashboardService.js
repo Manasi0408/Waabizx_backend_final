@@ -5,6 +5,30 @@ const getToken = () => {
   return localStorage.getItem('token');
 };
 
+const getSelectedProjectId = () => {
+  try {
+    const raw = localStorage.getItem('selectedProject');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const id = parsed?.id;
+    return id != null && String(id).trim() !== '' ? String(id) : null;
+  } catch (e) {
+    return null;
+  }
+};
+
+const buildHeaders = (token) => {
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`
+  };
+  const projectId = getSelectedProjectId();
+  if (projectId) {
+    headers['x-project-id'] = projectId;
+  }
+  return headers;
+};
+
 // Get Dashboard Stats
 export const getDashboardStats = async (days = 1) => {
   try {
@@ -19,10 +43,7 @@ export const getDashboardStats = async (days = 1) => {
     
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      }
+      headers: buildHeaders(token)
     });
 
     const data = await response.json();
@@ -56,10 +77,7 @@ export const getConversationQuota = async (accountId) => {
 
   const response = await fetch(`${API_URL}/dashboard/${accountId}`, {
     method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-    },
+    headers: buildHeaders(token),
   });
 
   const data = await response.json();

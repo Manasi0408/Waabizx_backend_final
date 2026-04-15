@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { WebhookLog, MetaMessage, Contact, Message, InboxMessage, User, WhatsAppAccount, CampaignAudience, Campaign, Template } = require('../models');
+const { WebhookLog, MetaMessage, Contact, Message, InboxMessage, User, WhatsAppAccount, CampaignAudience, Campaign, Template, ClientWhatsApp } = require('../models');
 const { Op } = require('sequelize');
 const socketService = require('../services/socketService');
 const db = require('../config/db'); // MySQL pool for conversations/agent routing
@@ -11,6 +11,38 @@ const OPT_IN_MESSAGE =
   'Thanks! You have been opted in for future marketing messages. You will now receive updates and notifications related to this project.';
 const OPT_OUT_MESSAGE =
   'You have been opted out of your future marketing messages. If you would like to receive messages again, reply APPLY above US/APPLY.';
+
+let hasConversationProjectIdColumn = null;
+const phoneVariants = (phone) => {
+  const raw = String(phone || '').trim();
+  if (!raw) return [];
+  const noPlus = raw.replace(/^\+/, '');
+  return [...new Set([raw, noPlus, `+${noPlus}`])];
+};
+
+async function resolveDefaultProjectId() {
+  try {
+    const [rows] = await db.query(`SELECT id FROM projects ORDER BY id ASC LIMIT 1`);
+    if (Array.isArray(rows) && rows.length > 0 && rows[0].id != null) return Number(rows[0].id);
+  } catch (e) {}
+  return 1;
+}
+
+async function supportsConversationProjectId() {
+  if (hasConversationProjectIdColumn != null) return hasConversationProjectIdColumn;
+  try {
+    const [rows] = await db.query("SHOW COLUMNS FROM conversations LIKE 'project_id'");
+    if (Array.isArray(rows) && rows.length > 0) {
+      hasConversationProjectIdColumn = true;
+      return hasConversationProjectIdColumn;
+    }
+    await db.query('ALTER TABLE conversations ADD COLUMN project_id INT NULL');
+    hasConversationProjectIdColumn = true;
+  } catch (e) {
+    hasConversationProjectIdColumn = false;
+  }
+  return hasConversationProjectIdColumn;
+}
 
 async function syncCampaignStatsFromAudience(campaignId) {
   if (!campaignId) return;
@@ -26,6 +58,34 @@ async function syncCampaignStatsFromAudience(campaignId) {
     { total, sent, delivered, read, failed },
     { where: { id: campaignId } }
   );
+}
+
+async function resolveProjectByCustomerPhone(customerPhone) {
+  if (!customerPhone) return null;
+  const variants = phoneVariants(customerPhone);
+  if (variants.length === 0) return null;
+  try {
+    const [convRows] = await db.query(
+      `SELECT project_id FROM conversations
+       WHERE phone IN (?) AND project_id IS NOT NULL
+       ORDER BY id DESC LIMIT 1`,
+      [variants]
+    );
+    if (Array.isArray(convRows) && convRows.length > 0 && convRows[0].project_id != null) {
+      return Number(convRows[0].project_id);
+    }
+  } catch (e) {}
+
+  try {
+    const mapping = await ClientWhatsApp.findOne({
+      where: { phone: { [Op.in]: variants } },
+      attributes: ['project_id'],
+      order: [['id', 'DESC']]
+    });
+    if (mapping?.project_id != null) return Number(mapping.project_id);
+  } catch (e) {}
+
+  return null;
 }
 
 // VERIFY WEBHOOK (for WhatsApp/Meta webhook verification)
@@ -67,6 +127,17 @@ exports.handleWebhook = async (req, res) => {
     console.log('========================================');
     console.log('Timestamp:', new Date().toISOString());
     console.log('Webhook Payload:', JSON.stringify(payload, null, 2));
+    console.log('FULL BODY:');
+    console.log(JSON.stringify(req.body, null, 2));
+
+    const debugValue = payload?.entry?.[0]?.changes?.[0]?.value || null;
+    console.log('phone_number_id:', debugValue?.metadata?.phone_number_id || null);
+    console.log('display_number:', debugValue?.metadata?.display_phone_number || null);
+    console.log('customer_number:', debugValue?.messages?.[0]?.from || null);
+    console.log('message:', debugValue?.messages?.[0]?.text?.body || null);
+    console.log('message_id:', debugValue?.messages?.[0]?.id || null);
+    console.log('business_account_id:', payload?.entry?.[0]?.id || null);
+    console.log('customer_name:', debugValue?.contacts?.[0]?.profile?.name || null);
 
     // 🔹 1. Save raw webhook (for debugging & audit)
     const eventType = payload.event || (payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0] ? 'message_received' : 'unknown');
@@ -79,14 +150,79 @@ exports.handleWebhook = async (req, res) => {
     console.log('✅ Webhook log saved to DB (ID:', webhookLog.id + ')');
 
     // Multi-client: identify client by WABA ID (entry[0].id = WABA ID)
+    let resolvedClientUserId = null;
+    let resolvedProjectId = null;
     if (payload.object === 'whatsapp_business_account' && payload.entry?.[0]) {
       const wabaId = payload.entry[0].id;
-      let clientId = null;
+      const phoneNumberId = payload.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id || null;
+      const customerPhoneFromPayload = payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from || null;
       try {
-        const account = await WhatsAppAccount.findOne({ where: { waba_id: wabaId }, attributes: ['client_id'] });
-        if (account) clientId = account.client_id;
+        let account = null;
+        // Priority for multi-number setup:
+        // 1) explicit WhatsApp number -> project mapping
+        // 2) WhatsAppAccount.projectId fallback
+        // 3) customer phone historical mapping fallback
+        if (phoneNumberId) {
+          const [projects] = await db.query(
+            'SELECT id FROM projects WHERE whatsapp_number_id = ? ORDER BY id DESC LIMIT 1',
+            [phoneNumberId]
+          );
+          if (Array.isArray(projects) && projects.length > 0) {
+            resolvedProjectId = Number(projects[0].id);
+          }
+        }
+        // IMPORTANT: resolve by phone_number_id first (most specific mapping),
+        // then fallback to waba_id if phone_number_id is unavailable.
+        if (phoneNumberId) {
+          account = await WhatsAppAccount.findOne({
+            where: { phone_number_id: phoneNumberId },
+            attributes: ['client_id', 'phone_number_id', 'waba_id', 'projectId']
+          });
+        }
+        if (!account && wabaId) {
+          account = await WhatsAppAccount.findOne({
+            where: { waba_id: wabaId },
+            attributes: ['client_id', 'phone_number_id', 'waba_id', 'projectId']
+          });
+        }
+        if (account?.client_id) {
+          resolvedClientUserId = Number(account.client_id);
+          if (resolvedProjectId == null && account.projectId != null && Number(account.projectId) > 0) {
+            resolvedProjectId = Number(account.projectId);
+          }
+          const ownerUser = await User.findByPk(resolvedClientUserId, {
+            attributes: ['id', 'projectId']
+          });
+          if (resolvedProjectId == null && ownerUser?.projectId) {
+            resolvedProjectId = Number(ownerUser.projectId);
+          }
+          // Debug parity logs for mapping verification
+          console.log('User phone_id:', account.phone_number_id || null);
+          console.log('Message phone_id:', phoneNumberId || null);
+        }
+        if (resolvedProjectId == null) {
+          const mappedByCustomer = await resolveProjectByCustomerPhone(customerPhoneFromPayload);
+          if (mappedByCustomer) {
+            resolvedProjectId = mappedByCustomer;
+          }
+        }
       } catch (e) {}
-      console.log('Message received for WABA:', wabaId, clientId != null ? `(client_id: ${clientId})` : '(no client mapped)');
+      if (!resolvedProjectId) {
+        resolvedProjectId = await resolveDefaultProjectId();
+      }
+      console.log(
+        'Message received for WABA:',
+        wabaId,
+        resolvedClientUserId != null ? `(client_id: ${resolvedClientUserId}, project_id: ${resolvedProjectId || 'null'})` : '(no client mapped)'
+      );
+    }
+
+    // AiSensy/event-based payloads may not include WABA metadata.
+    if (!resolvedProjectId && payload?.from) {
+      resolvedProjectId = await resolveProjectByCustomerPhone(payload.from);
+    }
+    if (!resolvedProjectId) {
+      resolvedProjectId = await resolveDefaultProjectId();
     }
 
     // 🔹 2. Handle Meta webhook changes (template status + message status)
@@ -189,7 +325,8 @@ exports.handleWebhook = async (req, res) => {
           direction: 'inbound',
           message_type: 'text',
           message_text: text,
-          status: 'received'
+          status: 'received',
+          projectId: resolvedProjectId || null
         });
         console.log('✅ MetaMessage saved to DB (ID:', metaMessage.id + ')');
 
@@ -198,11 +335,11 @@ exports.handleWebhook = async (req, res) => {
         // This ensures we match the contact created when template was sent
         console.log('\n🔍 Searching for contact with phone:', fromNumber);
         let contact = await Contact.findOne({
-          where: {
-            phone: fromNumber
-          },
+          where: resolvedProjectId
+            ? { phone: fromNumber, projectId: resolvedProjectId }
+            : { phone: fromNumber },
           order: [['updatedAt', 'DESC']], // Get most recently updated contact
-          attributes: ['id', 'phone', 'name', 'email', 'status', 'tags', 'country', 'lastContacted', 'notes', 'userId', 'whatsappOptInAt', 'createdAt', 'updatedAt']
+          attributes: ['id', 'phone', 'name', 'email', 'status', 'tags', 'country', 'lastContacted', 'notes', 'userId', 'projectId', 'whatsappOptInAt', 'createdAt', 'updatedAt']
         });
 
         const wasNewContact = !contact;
@@ -215,6 +352,9 @@ exports.handleWebhook = async (req, res) => {
         if (contact) {
           // Use the userId from existing contact
           userId = contact.userId;
+          if (resolvedProjectId && !contact.projectId) {
+            await contact.update({ projectId: resolvedProjectId });
+          }
           console.log('✅ Existing contact found!');
           console.log('   Contact ID:', contact.id);
           console.log('   User ID:', userId);
@@ -225,7 +365,7 @@ exports.handleWebhook = async (req, res) => {
           console.log('⚠️ Contact not found, creating new one...');
           // No contact found, create new one with first active user
           const firstUser = await User.findOne({
-            where: { status: 'active' },
+            where: resolvedProjectId ? { status: 'active', projectId: resolvedProjectId } : { status: 'active' },
             order: [['id', 'ASC']]
           });
 
@@ -235,11 +375,12 @@ exports.handleWebhook = async (req, res) => {
             return res.status(200).json({ success: true }); // Return success to webhook
           }
 
-          userId = firstUser.id;
+          userId = resolvedClientUserId || firstUser.id;
           console.log('👤 Creating new contact with user (ID:', userId + ')');
           
           contact = await Contact.create({
             userId: userId,
+            projectId: resolvedProjectId,
             phone: fromNumber,
             name: fromNumber, // Default name to phone number
             status: 'active'
@@ -320,6 +461,7 @@ exports.handleWebhook = async (req, res) => {
             inboxMessage = await InboxMessage.create({
               contactId: contact.id,
               userId: userId,
+              projectId: contact.projectId || resolvedProjectId || null,
               direction: 'incoming',
               message: text,
               type: 'text',
@@ -340,18 +482,29 @@ exports.handleWebhook = async (req, res) => {
 
           // Sync to live-chat (conversations + message) so /live-chat and /inbox both show customer messages
           try {
-            const [convRows] = await db.query(
-              "SELECT id FROM conversations WHERE phone = ? AND status != 'closed'",
-              [fromNumber]
-            );
+            const useConvProjectId = await supportsConversationProjectId();
+            const [convRows] = useConvProjectId && resolvedProjectId
+              ? await db.query(
+                  "SELECT id FROM conversations WHERE phone = ? AND status != 'closed' AND project_id = ?",
+                  [fromNumber, resolvedProjectId]
+                )
+              : await db.query(
+                  "SELECT id FROM conversations WHERE phone = ? AND status != 'closed'",
+                  [fromNumber]
+                );
             let convId;
             if (convRows && convRows.length > 0) {
               convId = convRows[0].id;
             } else {
-              const [ins] = await db.query(
-                "INSERT INTO conversations (phone, customer_name, last_message, status) VALUES (?, ?, ?, 'requesting')",
-                [fromNumber, fromNumber, text]
-              );
+              const [ins] = useConvProjectId && resolvedProjectId
+                ? await db.query(
+                    "INSERT INTO conversations (phone, customer_name, last_message, status, project_id) VALUES (?, ?, ?, 'requesting', ?)",
+                    [fromNumber, fromNumber, text, resolvedProjectId]
+                  )
+                : await db.query(
+                    "INSERT INTO conversations (phone, customer_name, last_message, status) VALUES (?, ?, ?, 'requesting')",
+                    [fromNumber, fromNumber, text]
+                  );
               convId = ins.insertId;
             }
             await db.query(
@@ -385,14 +538,24 @@ exports.handleWebhook = async (req, res) => {
           let agentId = null;
           let conversationId = null;
           try {
-            const [rows] = await db.query(
-              `SELECT id, agent_id
-               FROM conversations
-               WHERE phone = ? AND status != 'closed'
-               ORDER BY id DESC
-               LIMIT 1`,
-              [fromNumber]
-            );
+            const useConvProjectId = await supportsConversationProjectId();
+            const [rows] = useConvProjectId && resolvedProjectId
+              ? await db.query(
+                  `SELECT id, agent_id
+                   FROM conversations
+                   WHERE phone = ? AND status != 'closed' AND project_id = ?
+                   ORDER BY id DESC
+                   LIMIT 1`,
+                  [fromNumber, resolvedProjectId]
+                )
+              : await db.query(
+                  `SELECT id, agent_id
+                   FROM conversations
+                   WHERE phone = ? AND status != 'closed'
+                   ORDER BY id DESC
+                   LIMIT 1`,
+                  [fromNumber]
+                );
             if (rows && rows.length > 0) {
               conversationId = rows[0].id;
               agentId = rows[0].agent_id;
@@ -446,7 +609,8 @@ exports.handleWebhook = async (req, res) => {
           direction: 'inbound',
           message_type: 'text',
           message_text: text,
-          status: 'received'
+          status: 'received',
+          projectId: resolvedProjectId || null
         });
         console.log('✅ MetaMessage saved to DB (ID:', metaMessage.id + ')');
 
@@ -455,11 +619,11 @@ exports.handleWebhook = async (req, res) => {
         // This ensures we match the contact created when template was sent
         console.log('\n🔍 Searching for contact with phone:', phone);
         let contact = await Contact.findOne({
-          where: {
-            phone: phone
-          },
+          where: resolvedProjectId
+            ? { phone: phone, projectId: resolvedProjectId }
+            : { phone: phone },
           order: [['updatedAt', 'DESC']], // Get most recently updated contact
-          attributes: ['id', 'phone', 'name', 'email', 'status', 'tags', 'country', 'lastContacted', 'notes', 'userId', 'whatsappOptInAt', 'createdAt', 'updatedAt']
+          attributes: ['id', 'phone', 'name', 'email', 'status', 'tags', 'country', 'lastContacted', 'notes', 'userId', 'projectId', 'whatsappOptInAt', 'createdAt', 'updatedAt']
         });
 
         const wasNewContact = !contact;
@@ -472,6 +636,9 @@ exports.handleWebhook = async (req, res) => {
         if (contact) {
           // Use the userId from existing contact
           userId = contact.userId;
+          if (resolvedProjectId && !contact.projectId) {
+            await contact.update({ projectId: resolvedProjectId });
+          }
           console.log('✅ Existing contact found!');
           console.log('   Contact ID:', contact.id);
           console.log('   User ID:', userId);
@@ -482,7 +649,7 @@ exports.handleWebhook = async (req, res) => {
           console.log('⚠️ Contact not found, creating new one...');
           // No contact found, create new one with first active user
           const firstUser = await User.findOne({
-            where: { status: 'active' },
+            where: resolvedProjectId ? { status: 'active', projectId: resolvedProjectId } : { status: 'active' },
             order: [['id', 'ASC']]
           });
 
@@ -492,11 +659,12 @@ exports.handleWebhook = async (req, res) => {
             return res.status(200).json({ success: true }); // Return success to webhook
           }
 
-          userId = firstUser.id;
+          userId = resolvedClientUserId || firstUser.id;
           console.log('👤 Creating new contact with user (ID:', userId + ')');
           
           contact = await Contact.create({
             userId: userId,
+            projectId: resolvedProjectId,
             phone: phone,
             name: phone, // Default name to phone number
             status: 'active'
@@ -576,6 +744,7 @@ exports.handleWebhook = async (req, res) => {
             inboxMessage = await InboxMessage.create({
               contactId: contact.id,
               userId: userId,
+              projectId: contact.projectId || resolvedProjectId || null,
               direction: 'incoming',
               message: text,
               type: 'text',
@@ -598,17 +767,28 @@ exports.handleWebhook = async (req, res) => {
           // Sync to live-chat (conversations + message) so /live-chat and /inbox both show customer messages
           let conversationId = null;
           try {
-            const [convRows] = await db.query(
-              "SELECT id FROM conversations WHERE phone = ? AND status != 'closed'",
-              [phone]
-            );
+            const useConvProjectId = await supportsConversationProjectId();
+            const [convRows] = useConvProjectId && resolvedProjectId
+              ? await db.query(
+                  "SELECT id FROM conversations WHERE phone = ? AND status != 'closed' AND project_id = ?",
+                  [phone, resolvedProjectId]
+                )
+              : await db.query(
+                  "SELECT id FROM conversations WHERE phone = ? AND status != 'closed'",
+                  [phone]
+                );
             if (convRows && convRows.length > 0) {
               conversationId = convRows[0].id;
             } else {
-              const [ins] = await db.query(
-                "INSERT INTO conversations (phone, customer_name, last_message, status) VALUES (?, ?, ?, 'requesting')",
-                [phone, phone, text]
-              );
+              const [ins] = useConvProjectId && resolvedProjectId
+                ? await db.query(
+                    "INSERT INTO conversations (phone, customer_name, last_message, status, project_id) VALUES (?, ?, ?, 'requesting', ?)",
+                    [phone, phone, text, resolvedProjectId]
+                  )
+                : await db.query(
+                    "INSERT INTO conversations (phone, customer_name, last_message, status) VALUES (?, ?, ?, 'requesting')",
+                    [phone, phone, text]
+                  );
               conversationId = ins.insertId;
             }
             await db.query(
@@ -630,14 +810,24 @@ exports.handleWebhook = async (req, res) => {
           // 1️⃣ Look up latest open conversation for this phone to find agent_id
           let agentId = null;
           try {
-            const [rows] = await db.query(
-              `SELECT id, agent_id
-               FROM conversations
-               WHERE phone = ? AND status != 'closed'
-               ORDER BY id DESC
-               LIMIT 1`,
-              [phone]
-            );
+            const useConvProjectId = await supportsConversationProjectId();
+            const [rows] = useConvProjectId && resolvedProjectId
+              ? await db.query(
+                  `SELECT id, agent_id
+                   FROM conversations
+                   WHERE phone = ? AND status != 'closed' AND project_id = ?
+                   ORDER BY id DESC
+                   LIMIT 1`,
+                  [phone, resolvedProjectId]
+                )
+              : await db.query(
+                  `SELECT id, agent_id
+                   FROM conversations
+                   WHERE phone = ? AND status != 'closed'
+                   ORDER BY id DESC
+                   LIMIT 1`,
+                  [phone]
+                );
             if (rows && rows.length > 0) {
               conversationId = conversationId || rows[0].id;
               agentId = rows[0].agent_id;

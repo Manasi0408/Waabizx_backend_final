@@ -12,6 +12,7 @@ import {
   getMetaTemplates
 } from '../services/templateService';
 import MainSidebarNav from '../components/MainSidebarNav';
+import AdminHeaderProjectSwitch from '../components/AdminHeaderProjectSwitch';
 
 function Templates() {
   const navigate = useNavigate();
@@ -420,6 +421,7 @@ function Templates() {
 
           <span className="text-gray-300 hidden md:block">|</span>
           <h2 className="text-lg font-semibold text-sky-700 hidden md:block tracking-tight">Templates</h2>
+          <AdminHeaderProjectSwitch />
         </div>
 
         <div className="flex items-center gap-3 md:gap-4">

@@ -13,6 +13,7 @@ import "reactflow/dist/style.css";
 import { useNavigate } from "react-router-dom";
 import axios from "../api/axios";
 import MainSidebarNav from "../components/MainSidebarNav";
+import AdminHeaderProjectSwitch from "../components/AdminHeaderProjectSwitch";
 import { getProfile, isAuthenticated, logout } from "../services/authService";
 
 function getTemplateBodyText(template) {
@@ -412,7 +413,6 @@ function Flows() {
   const [savedFlowId, setSavedFlowId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [loadingSavedFlow, setLoadingSavedFlow] = useState(false);
-  const [flowLoadId, setFlowLoadId] = useState("");
   const [savedFlowsList, setSavedFlowsList] = useState([]);
   const [loadingFlowsList, setLoadingFlowsList] = useState(false);
 
@@ -923,7 +923,6 @@ function Flows() {
 
           setSavedFlowId(resp.data.flow.id);
           setFlowName(resp.data.flow.name || "My Flow");
-          setFlowLoadId(String(resp.data.flow.id));
           setTestStarted(false);
           setExecutionCurrentNodeId(null);
           setExecutionLog([]);
@@ -935,9 +934,38 @@ function Flows() {
     [setEdges, setNodes]
   );
 
-  const handleLoadFlow = useCallback(() => {
-    loadFlowById(flowLoadId);
-  }, [flowLoadId, loadFlowById]);
+  const handleLoadFlow = useCallback(async () => {
+    const pickLatest = (list) =>
+      [...(Array.isArray(list) ? list : [])]
+        .sort((a, b) => new Date(b?.updatedAt || b?.createdAt || 0) - new Date(a?.updatedAt || a?.createdAt || 0))[0];
+
+    let target = pickLatest(savedFlowsList);
+    if (!target?.id) {
+      setLoadingFlowsList(true);
+      try {
+        const resp = await axios.get("/flows");
+        const list = resp?.data?.success && Array.isArray(resp.data.flows) ? resp.data.flows : [];
+        if (resp?.data?.success) {
+          const uniqueByName = [];
+          const seenNames = new Set();
+          for (const flow of list) {
+            const key = String(flow?.name || "").trim().toLowerCase();
+            if (!key || seenNames.has(key)) continue;
+            seenNames.add(key);
+            uniqueByName.push(flow);
+          }
+          setSavedFlowsList(uniqueByName);
+          target = pickLatest(uniqueByName);
+        }
+      } finally {
+        setLoadingFlowsList(false);
+      }
+    }
+
+    if (target?.id) {
+      loadFlowById(target.id);
+    }
+  }, [savedFlowsList, loadFlowById]);
 
   const handleCreateNewFlow = useCallback(() => {
     setNodes([
@@ -951,7 +979,6 @@ function Flows() {
     setEdges([]);
     setFlowName("My Flow");
     setSavedFlowId(null);
-    setFlowLoadId("");
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
     setTestStarted(false);
@@ -1000,9 +1027,9 @@ function Flows() {
         <MainSidebarNav />
       </aside>
 
-      <div className="flex-1 min-h-0 flex flex-col">
-        <header className="motion-header-enter shrink-0 z-10 bg-white/90 backdrop-blur-md border-b border-gray-200/80 px-4 md:px-8 py-3.5 md:py-4 flex items-center justify-between gap-3 shadow-sm shadow-gray-200/50">
-          <div className="min-w-0 flex items-center gap-4">
+      <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+        <header className="motion-header-enter shrink-0 z-10 bg-white/90 backdrop-blur-md border-b border-gray-200/80 px-3 sm:px-4 md:px-6 py-3 md:py-3.5 min-w-0 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-x-3 sm:gap-y-2 shadow-sm shadow-gray-200/50">
+          <div className="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1 sm:gap-x-3 sm:flex-1 sm:min-w-0">
             <div
               className="flex items-center gap-3 transition-all duration-300 hover:opacity-90 hover:scale-[1.02] active:scale-[0.98] shrink-0 cursor-pointer"
               onClick={() => navigate("/dashboard")}
@@ -1020,48 +1047,43 @@ function Flows() {
               </h1>
             </div>
             <span className="text-gray-300 hidden md:block shrink-0">|</span>
-            <div className="min-w-0">
+            <div className="min-w-0 max-w-full">
               <h2 className="text-lg font-semibold text-sky-700 tracking-tight">Flows</h2>
               <p className="text-xs md:text-sm text-gray-500 truncate">Drag nodes, connect lines, configure, then save and execute.</p>
             </div>
+            <AdminHeaderProjectSwitch />
           </div>
 
-          <div className="flex items-center gap-2 md:gap-4">
-            <div className="hidden md:flex items-center gap-2">
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto sm:max-w-full sm:justify-end sm:shrink-0">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={handleCreateNewFlow}
-                className="px-3 py-2 rounded-xl bg-white/80 border border-gray-200/80 text-gray-700 text-sm font-semibold hover:bg-white transition-all duration-200"
+                className="px-2.5 py-2 sm:px-3 rounded-xl bg-white/80 border border-gray-200/80 text-gray-700 text-xs sm:text-sm font-semibold hover:bg-white transition-all duration-200"
               >
                 New Flow
               </button>
               <input
                 value={flowName}
                 onChange={(e) => setFlowName(e.target.value)}
-                className="w-44 px-3 py-2 rounded-xl border border-gray-200/80 bg-white/70 focus:outline-none focus:ring-2 focus:ring-sky-300/70 text-sm"
+                className="min-w-0 w-[7.5rem] max-w-[11rem] sm:w-36 sm:max-w-none md:w-44 px-2.5 sm:px-3 py-2 rounded-xl border border-gray-200/80 bg-white/70 focus:outline-none focus:ring-2 focus:ring-sky-300/70 text-xs sm:text-sm"
                 placeholder="Flow name"
               />
               <button
                 type="button"
                 onClick={handleSaveFlow}
                 disabled={saving}
-                className="px-3 py-2 rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 text-white text-sm font-semibold shadow-md shadow-sky-500/25 hover:shadow-lg disabled:opacity-60 transition-all duration-200"
+                className="px-2.5 py-2 sm:px-3 rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 text-white text-xs sm:text-sm font-semibold shadow-md shadow-sky-500/25 hover:shadow-lg disabled:opacity-60 transition-all duration-200"
               >
                 {saving ? "Saving..." : "Save"}
               </button>
             </div>
-            <div className="flex items-center gap-2">
-              <input
-                value={flowLoadId}
-                onChange={(e) => setFlowLoadId(e.target.value)}
-                className="w-28 md:w-36 px-3 py-2 rounded-xl border border-gray-200/80 bg-white/70 focus:outline-none focus:ring-2 focus:ring-sky-300/70 text-sm"
-                placeholder="Flow ID"
-              />
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={handleLoadFlow}
-                disabled={loadingSavedFlow}
-                className="px-3 py-2 rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 text-white text-sm font-semibold shadow-md shadow-sky-500/25 hover:shadow-lg disabled:opacity-60 transition-all duration-200"
+                disabled={loadingSavedFlow || loadingFlowsList}
+                className="px-2.5 py-2 sm:px-3 rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 text-white text-xs sm:text-sm font-semibold shadow-md shadow-sky-500/25 hover:shadow-lg disabled:opacity-60 transition-all duration-200"
               >
                 {loadingSavedFlow ? "Loading..." : "Load"}
               </button>
@@ -1069,17 +1091,17 @@ function Flows() {
             <button
               type="button"
               onClick={() => navigate("/settings")}
-              className="w-10 h-10 rounded-full bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 flex items-center justify-center cursor-pointer shadow-md shadow-sky-500/35 hover:shadow-lg hover:ring-2 ring-sky-300/60 hover:scale-[1.03] transition-all duration-200 focus:outline-none"
+              className="shrink-0 w-10 h-10 rounded-full bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 flex items-center justify-center cursor-pointer shadow-md shadow-sky-500/35 hover:shadow-lg hover:ring-2 ring-sky-300/60 hover:scale-[1.03] transition-all duration-200 focus:outline-none"
             >
               <span className="text-white font-semibold text-sm">{userInitial}</span>
             </button>
           </div>
         </header>
 
-        <div className="flex-1 min-h-0 overflow-hidden bg-gradient-to-b from-sky-50/50 via-white to-sky-100/30">
-          <div className="flex flex-row h-full min-h-0">
+        <div className="flex-1 min-h-0 min-w-0 overflow-hidden bg-gradient-to-b from-sky-50/50 via-white to-sky-100/30">
+          <div className="flex h-full min-h-0 min-w-0 flex-row">
             {/* Palette (left) */}
-            <aside className="w-72 shrink-0 border-r border-gray-200/70 bg-white/60 backdrop-blur-sm p-3 flex flex-col min-h-0">
+            <aside className="w-[13.5rem] sm:w-60 lg:w-72 shrink-0 border-r border-gray-200/70 bg-white/60 backdrop-blur-sm p-3 flex flex-col min-h-0 min-w-0 overflow-hidden">
               <div className="pb-3 bg-white/60 backdrop-blur-sm">
                 <div className="text-xs font-bold uppercase tracking-wider text-sky-700/80">Node Types</div>
                 <div className="mt-1 text-xs text-gray-500">
@@ -1198,18 +1220,18 @@ function Flows() {
             </main>
 
             {/* Config (right) */}
-            <aside className="w-64 shrink-0 border-l border-gray-200/70 bg-white/60 backdrop-blur-sm p-3 overflow-y-auto">
-              <div className="flex items-center justify-between gap-2">
-                <div>
+            <aside className="w-[13rem] sm:w-56 lg:w-64 shrink-0 min-w-0 border-l border-gray-200/70 bg-white/60 backdrop-blur-sm p-3 overflow-y-auto overflow-x-hidden">
+              <div className="flex min-w-0 items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
                   <div className="text-xs font-bold uppercase tracking-wider text-sky-700/80">Configuration</div>
                   <div className="mt-1 text-xs text-gray-500">Edit selected node/edge.</div>
                 </div>
                 {savedFlowId ? (
-                  <span className="inline-flex items-center rounded-full bg-sky-50 text-sky-800 px-2 py-1 text-[11px] font-bold ring-1 ring-sky-100/60">
+                  <span className="inline-flex max-w-[10rem] min-w-0 shrink items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-full bg-sky-50 text-sky-800 px-2 py-1 text-[11px] font-bold ring-1 ring-sky-100/60" title={`Flow ID: ${savedFlowId}`}>
                     Flow ID: {savedFlowId}
                   </span>
                 ) : (
-                  <span className="inline-flex items-center rounded-full bg-gray-50 text-gray-700 px-2 py-1 text-[11px] font-bold ring-1 ring-gray-200/70">
+                  <span className="inline-flex shrink-0 items-center rounded-full bg-gray-50 text-gray-700 px-2 py-1 text-[11px] font-bold ring-1 ring-gray-200/70">
                     Not saved
                   </span>
                 )}
@@ -1434,15 +1456,15 @@ function Flows() {
                 ) : null}
 
                 {/* Execute Test */}
-                <div className="rounded-2xl border border-gray-100/80 bg-gradient-to-br from-white to-sky-50/30 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
+                <div className="rounded-2xl border border-gray-100/80 bg-gradient-to-br from-white to-sky-50/30 p-3 min-w-0">
+                  <div className="flex min-w-0 items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
                       <div className="text-xs font-bold uppercase tracking-wider text-sky-800/80">Flow Execution</div>
                       <div className="mt-1 text-xs text-gray-600">
                         {testStarted ? "Answer the question" : "Start from the beginning"}
                       </div>
                     </div>
-                    <span className="inline-flex items-center rounded-full bg-white/80 px-2 py-1 text-[11px] font-bold ring-1 ring-gray-200/80 text-gray-700">
+                    <span className="inline-flex max-w-[9rem] min-w-0 shrink-0 items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-full bg-white/80 px-2 py-1 text-[11px] font-bold ring-1 ring-gray-200/80 text-gray-700" title={executionCurrentNodeId ? `at ${executionCurrentNodeId}` : "start"}>
                       {executionCurrentNodeId ? `at ${executionCurrentNodeId}` : "start"}
                     </span>
                   </div>
@@ -1460,12 +1482,12 @@ function Flows() {
                     />
                   </div>
 
-                  <div className="mt-3 flex items-center gap-2">
+                  <div className="mt-3 flex min-w-0 flex-wrap items-stretch gap-2">
                     <button
                       type="button"
                       onClick={handleExecuteTest}
                       disabled={!savedFlowId || executing}
-                      className="flex-1 px-3 py-2 rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 text-white text-sm font-semibold shadow-md shadow-sky-500/25 hover:shadow-lg disabled:opacity-60 transition-all duration-200"
+                      className="min-w-0 flex-1 basis-[8rem] px-2 sm:px-3 py-2 rounded-xl bg-gradient-to-br from-sky-500 via-sky-600 to-blue-700 text-white text-xs sm:text-sm font-semibold shadow-md shadow-sky-500/25 hover:shadow-lg disabled:opacity-60 transition-all duration-200"
                     >
                       {executing ? "Running..." : testStarted ? "Run (answer)" : "Run (start)"}
                     </button>
@@ -1477,7 +1499,7 @@ function Flows() {
                         setExecutionLog([]);
                         setTestInput("");
                       }}
-                      className="px-3 py-2 rounded-xl bg-white/70 border border-gray-200/80 text-sm font-semibold text-gray-700 hover:bg-white disabled:opacity-60 transition-all duration-200"
+                      className="shrink-0 px-2.5 sm:px-3 py-2 rounded-xl bg-white/70 border border-gray-200/80 text-xs sm:text-sm font-semibold text-gray-700 hover:bg-white disabled:opacity-60 transition-all duration-200"
                     >
                       Reset
                     </button>

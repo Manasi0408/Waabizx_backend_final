@@ -1,8 +1,33 @@
-const API_URL = 'https://wabizx.techwhizzc.com/';
+const API_URL = 'https://wabizx.techwhizzc.com';
 
 // Get token from localStorage
 const getToken = () => {
   return localStorage.getItem('token');
+};
+
+const getSelectedProjectId = () => {
+  try {
+    const raw = localStorage.getItem('selectedProject');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const id = parsed?.id;
+    return id != null && String(id).trim() !== '' ? String(id) : null;
+  } catch (e) {
+    return null;
+  }
+};
+
+const buildHeaders = () => {
+  const token = getToken();
+  const projectId = getSelectedProjectId();
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`
+  };
+  if (projectId) {
+    headers['x-project-id'] = projectId;
+  }
+  return headers;
 };
 
 // Get inbound messages
@@ -23,10 +48,7 @@ export const getInboundMessages = async (limit = 10, phone = null, since = null)
 
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      }
+      headers: buildHeaders()
     });
 
     const data = await response.json();
@@ -61,10 +83,7 @@ export const sendMetaMessage = async (phone, text, type = 'text', template = nul
 
     const response = await fetch(`${API_URL}/messages/send`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
+      headers: buildHeaders(),
       body: JSON.stringify(payload)
     });
 
@@ -100,10 +119,7 @@ export const getMessageStatus = async (id) => {
 
     const response = await fetch(`${API_URL}/messages/status/${id}`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      }
+      headers: buildHeaders()
     });
 
     const data = await response.json();
@@ -139,10 +155,7 @@ export const getAllMetaMessages = async (phone, limit = 100, since = null) => {
 
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      }
+      headers: buildHeaders()
     });
 
     const data = await response.json();
@@ -186,10 +199,7 @@ export const getWebhookLogs = async (limit = 50, event_type = null, phone = null
 
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      }
+      headers: buildHeaders()
     });
 
     const data = await response.json();

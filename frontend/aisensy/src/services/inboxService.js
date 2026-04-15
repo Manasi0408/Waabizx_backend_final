@@ -5,6 +5,32 @@ const getToken = () => {
   return localStorage.getItem('token');
 };
 
+// Get currently selected project id from localStorage
+const getSelectedProjectId = () => {
+  try {
+    const raw = localStorage.getItem('selectedProject');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const id = parsed?.id;
+    return id != null && String(id).trim() !== '' ? String(id) : null;
+  } catch (e) {
+    return null;
+  }
+};
+
+const buildHeaders = () => {
+  const token = getToken();
+  const projectId = getSelectedProjectId();
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`
+  };
+  if (projectId) {
+    headers['x-project-id'] = projectId;
+  }
+  return headers;
+};
+
 // Get inbox chat list
 export const getInboxList = async () => {
   try {
@@ -15,10 +41,7 @@ export const getInboxList = async () => {
 
     const response = await fetch(`${API_URL}/inbox`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      }
+      headers: buildHeaders()
     });
 
     const data = await response.json();
@@ -50,10 +73,7 @@ export const getContactMessages = async (phone) => {
     const safePhone = phone.replace(/\+/g, '%2B');
     const response = await fetch(`${API_URL}/inbox/${safePhone}/messages`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      }
+      headers: buildHeaders()
     });
 
     const data = await response.json();
@@ -98,10 +118,7 @@ export const sendMessage = async (phone, text) => {
 
     const response = await fetch(`${API_URL}/inbox/send`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
+      headers: buildHeaders(),
       body: JSON.stringify({ phone, text })
     });
 
@@ -140,10 +157,7 @@ export const markAsRead = async (phone) => {
     const safePhone = phone.replace(/\+/g, '%2B');
     const response = await fetch(`${API_URL}/inbox/${safePhone}/read`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      }
+      headers: buildHeaders()
     });
 
     const data = await response.json();

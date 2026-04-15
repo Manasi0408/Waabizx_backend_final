@@ -9,8 +9,7 @@ const ClientWhatsApp = sequelize.define('ClientWhatsApp', {
   },
   client_id: {
     type: DataTypes.INTEGER,
-    allowNull: false,
-    unique: true
+    allowNull: false
   },
   waba_id: {
     type: DataTypes.STRING(50),
@@ -19,6 +18,16 @@ const ClientWhatsApp = sequelize.define('ClientWhatsApp', {
   phone_number_id: {
     type: DataTypes.STRING(50),
     allowNull: true
+  },
+  phone: {
+    type: DataTypes.STRING(20),
+    allowNull: true,
+    comment: 'Customer phone to project mapping (single WABA mode)'
+  },
+  project_id: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: null
   },
   access_token: {
     type: DataTypes.TEXT,

@@ -4,6 +4,7 @@ import { getProfile, isAuthenticated, logout, updateProfile } from '../services/
 import { getSettings } from '../services/settingsService';
 import { getNotifications, markAsRead, markAllAsRead } from '../services/notificationService';
 import MainSidebarNav from '../components/MainSidebarNav';
+import AdminHeaderProjectSwitch from '../components/AdminHeaderProjectSwitch';
 
 function Settings() {
   const navigate = useNavigate();
@@ -287,6 +288,7 @@ function Settings() {
 
           <span className="text-gray-300 hidden md:block shrink-0">|</span>
           <h2 className="text-lg font-semibold text-sky-700 hidden md:block tracking-tight">Settings</h2>
+          <AdminHeaderProjectSwitch />
         </div>
 
         <div className="flex items-center gap-3 md:gap-4">

@@ -5,6 +5,7 @@ import { getNotifications, markAsRead, markAllAsRead } from '../services/notific
 import { getOverview, getCampaignAnalytics, getMessageAnalytics, getContactAnalytics, getCostAnalytics } from '../services/analyticsService';
 import { getCampaigns } from '../services/campaignService';
 import MainSidebarNav from '../components/MainSidebarNav';
+import AdminHeaderProjectSwitch from '../components/AdminHeaderProjectSwitch';
 
 function Analytics() {
   const navigate = useNavigate();
@@ -309,6 +310,7 @@ function Analytics() {
 
           <span className="text-gray-300 hidden md:block shrink-0">|</span>
           <h2 className="text-lg font-semibold text-sky-700 hidden md:block tracking-tight">Analytics</h2>
+          <AdminHeaderProjectSwitch />
         </div>
 
         <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3 md:gap-4">

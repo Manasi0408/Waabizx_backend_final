@@ -13,19 +13,24 @@ function phoneVariants(phone) {
  * Uses contact.userId (account owner) so owner dashboards include agent sends.
  */
 async function recordOutboundInboxMessage(phone, messageBody, opts = {}) {
-  const { type = 'text', status = 'sent', waMessageId = null } = opts;
+  const { type = 'text', status = 'sent', waMessageId = null, projectId: scopedProjectId = null } = opts;
   const variants = phoneVariants(phone);
   if (variants.length === 0) return;
 
   try {
+    const contactWhere = { phone: { [Op.in]: variants } };
+    if (scopedProjectId != null && Number(scopedProjectId) > 0) {
+      contactWhere.projectId = Number(scopedProjectId);
+    }
     const contact = await Contact.findOne({
-      where: { phone: { [Op.in]: variants } },
+      where: contactWhere,
     });
     if (!contact || contact.userId == null) return;
 
     await InboxMessage.create({
       contactId: contact.id,
       userId: contact.userId,
+      projectId: contact.projectId != null ? contact.projectId : scopedProjectId,
       direction: 'outgoing',
       message: String(messageBody != null ? messageBody : '').slice(0, 65000) || '(no text)',
       type,

@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { ClientWhatsApp } = require('../models');
+const { resolveWabaAndPhoneFromToken } = require('../services/meta.service');
 
 const APP_ID = process.env.APP_ID || process.env.META_APP_ID;
 const APP_SECRET = process.env.APP_SECRET || process.env.META_APP_SECRET;
@@ -34,38 +35,6 @@ async function getLongLivedToken(shortToken) {
   return response.data.access_token;
 }
 
-async function getWabaId(token) {
-  const response = await axios.get(
-    `https://graph.facebook.com/${API_VERSION}/me?fields=whatsapp_business_accounts`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    }
-  );
-  const accounts = response.data.whatsapp_business_accounts?.data;
-  if (!accounts || accounts.length === 0) {
-    throw new Error('No WhatsApp Business Account found');
-  }
-  return accounts[0].id;
-}
-
-async function getPhoneNumberId(token, wabaId) {
-  const response = await axios.get(
-    `https://graph.facebook.com/${API_VERSION}/${wabaId}/phone_numbers`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    }
-  );
-  const phones = response.data.data;
-  if (!phones || phones.length === 0) {
-    throw new Error('No phone number found for WABA');
-  }
-  return phones[0].id;
-}
-
 exports.onboard = async (req, res) => {
   try {
     const { code, client_id: clientId } = req.body;
@@ -86,8 +55,7 @@ exports.onboard = async (req, res) => {
 
     const shortToken = await exchangeCode(code);
     const longLivedToken = await getLongLivedToken(shortToken);
-    const wabaId = await getWabaId(longLivedToken);
-    const phoneNumberId = await getPhoneNumberId(longLivedToken, wabaId);
+    const { wabaId, phoneNumberId } = await resolveWabaAndPhoneFromToken(longLivedToken);
 
     const [row] = await ClientWhatsApp.findOrCreate({
       where: { client_id: clientId },

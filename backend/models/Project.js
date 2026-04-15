@@ -8,9 +8,20 @@ class Project {
         id INT AUTO_INCREMENT PRIMARY KEY,
         user_id INT NOT NULL,
         project_name VARCHAR(255) NOT NULL,
+        whatsapp_number_id VARCHAR(100) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    // Backward compatibility for old databases created before whatsapp_number_id.
+    try {
+      const [cols] = await db.query(`SHOW COLUMNS FROM projects LIKE 'whatsapp_number_id'`);
+      if (!Array.isArray(cols) || cols.length === 0) {
+        await db.query('ALTER TABLE projects ADD COLUMN whatsapp_number_id VARCHAR(100) NULL');
+      }
+    } catch (e) {
+      // Non-fatal: keep project features working even if alter fails.
+      console.error('Could not ensure projects.whatsapp_number_id:', e?.message || e);
+    }
   }
 
   static async create(userId, projectName) {

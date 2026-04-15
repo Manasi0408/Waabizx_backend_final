@@ -26,6 +26,12 @@ const WhatsAppAccount = sequelize.define('WhatsAppAccount', {
   token_expiry: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  projectId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: null,
+    comment: 'Inbox / webhook routing: which project this WABA number belongs to'
   }
 }, {
   tableName: 'whatsapp_accounts',

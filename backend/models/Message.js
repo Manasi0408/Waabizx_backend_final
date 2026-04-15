@@ -43,6 +43,11 @@ const Message = sequelize.define('Message', {
     type: DataTypes.INTEGER,
     allowNull: true
   },
+  projectId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: null
+  },
   // Media support (commented out - columns don't exist in DB yet)
   // mediaType: {
   //   type: DataTypes.ENUM('text', 'image', 'video', 'audio', 'document', 'location', 'contact'),

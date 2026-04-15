@@ -14,6 +14,7 @@ import {
   getCampaignAudience
 } from '../services/campaignService';
 import MainSidebarNav from '../components/MainSidebarNav';
+import AdminHeaderProjectSwitch from '../components/AdminHeaderProjectSwitch';
 import { uploadCSV } from '../services/broadcastService';
 // Campaign creation now uses parse-only CSV upload (no heavy contact loading)
 
@@ -471,6 +472,7 @@ function Campaigns() {
 
           <span className="text-gray-300 hidden md:block">|</span>
           <h2 className="text-lg font-semibold text-sky-700 hidden md:block tracking-tight">Campaigns</h2>
+          <AdminHeaderProjectSwitch />
         </div>
 
         <div className="flex items-center gap-3 md:gap-4">

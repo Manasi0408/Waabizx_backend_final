@@ -1,6 +1,6 @@
 const { sequelize, Campaign, Contact, Message, User, InboxMessage } = require('../models');
 const { Op } = require('sequelize');
-const { upsertConversationWithQuota, getUsedConversations, ensureAccountExists } = require('../services/conversationBillingService');
+const { upsertConversationWithQuota, ensureAccountExists } = require('../services/conversationBillingService');
 const { requireProjectId } = require('../utils/projectScope');
 
 exports.getDashboardStats = async (req, res) => {
@@ -422,9 +422,24 @@ exports.getConversationQuota = async (req, res) => {
     if (!accountId || Number.isNaN(accountId)) {
       return res.status(400).json({ success: false, message: 'Invalid account id' });
     }
+    const projectId = requireProjectId(req, res);
+    if (!projectId) return;
 
     const { limit, name: accountName } = await ensureAccountExists(accountId);
-    const used = await getUsedConversations(accountId);
+    // Project-wise "used conversations" (distinct outgoing phones in last 24h for this project)
+    const usedRows = await sequelize.query(
+      `SELECT COUNT(DISTINCT im.contactId) AS total
+       FROM inboxmessages im
+       WHERE im.userId = :accountId
+         AND im.projectId = :projectId
+         AND im.direction = 'outgoing'
+         AND im.timestamp >= NOW() - INTERVAL 24 HOUR`,
+      {
+        replacements: { accountId, projectId },
+        type: sequelize.QueryTypes.SELECT,
+      }
+    );
+    const used = Number(usedRows?.[0]?.total || 0);
 
     // Per-message metric: outbound rows today (calendar day, server local midnight)
     const todayStart = new Date();
@@ -432,6 +447,7 @@ exports.getConversationQuota = async (req, res) => {
     const messagesSentToday = await InboxMessage.count({
       where: {
         userId: accountId,
+        projectId,
         direction: 'outgoing',
         timestamp: { [Op.gte]: todayStart },
       },
