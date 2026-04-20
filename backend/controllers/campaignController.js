@@ -39,6 +39,52 @@ function buildAudienceVars(contact, variable_mapping) {
   return vars;
 }
 
+function normalizeContactIdsFromPayload(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (item == null) return null;
+        if (typeof item === 'object') return parseInt(item.id, 10);
+        return parseInt(item, 10);
+      })
+      .filter((id) => Number.isInteger(id) && id > 0);
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((v) => parseInt(v.trim(), 10))
+      .filter((id) => Number.isInteger(id) && id > 0);
+  }
+  return [];
+}
+
+function normalizeAudienceFromPayload(audiencePayload) {
+  if (!Array.isArray(audiencePayload)) return [];
+  return audiencePayload
+    .map((item) => {
+      if (!item) return null;
+      if (typeof item === 'string') {
+        const phone = item.trim();
+        if (!phone) return null;
+        return { phone, var1: null, var2: null, var3: null, var4: null, var5: null };
+      }
+      if (typeof item === 'number') {
+        return null;
+      }
+      const phone = String(item.phone || item.msisdn || item.to || '').trim();
+      if (!phone) return null;
+      return {
+        phone,
+        var1: item.var1 || null,
+        var2: item.var2 || null,
+        var3: item.var3 || null,
+        var4: item.var4 || null,
+        var5: item.var5 || null
+      };
+    })
+    .filter(Boolean);
+}
+
 // Create Campaign (draft or with audience)
 exports.createCampaign = async (req, res) => {
   try {
@@ -68,6 +114,9 @@ exports.createCampaign = async (req, res) => {
     } else if (audience && Array.isArray(audience) && audience.length > 0) {
       status = 'PENDING';
       total = audience.length;
+    } else if (status === 'draft' && String(req.body.status || '').toUpperCase() === 'PENDING') {
+      // PENDING without audience: add contacts via POST .../contacts before start (testing / staged setup)
+      status = 'PENDING';
     }
 
     const campaign = await Campaign.create({
@@ -417,17 +466,132 @@ exports.startCampaign = async (req, res) => {
     }
 
     if (campaign.status === 'draft') {
-      const audienceCount = await CampaignAudience.count({ where: { campaignId } });
+      let audienceCount = await CampaignAudience.count({ where: { campaignId } });
+
+      // Allow starting directly by passing audience/contactIds in start payload.
+      if (audienceCount === 0) {
+        const body = req.body || {};
+        const contactIds = [
+          ...normalizeContactIdsFromPayload(body.contactIds),
+          ...normalizeContactIdsFromPayload(body.contact_ids),
+          ...normalizeContactIdsFromPayload(body.contacts),
+          ...normalizeContactIdsFromPayload(body.audience_ids),
+          ...normalizeContactIdsFromPayload(body.audienceIds)
+        ];
+        const audience =
+          normalizeAudienceFromPayload(body.audience).length > 0
+            ? normalizeAudienceFromPayload(body.audience)
+            : normalizeAudienceFromPayload(body.recipients);
+        const incomingMapping =
+          (body.variable_mapping && typeof body.variable_mapping === 'object' && body.variable_mapping) ||
+          (body.variableMapping && typeof body.variableMapping === 'object' && body.variableMapping) ||
+          (body.mapping && typeof body.mapping === 'object' && body.mapping) ||
+          null;
+        const effectiveMapping = incomingMapping || (campaign.variable_mapping && typeof campaign.variable_mapping === 'object' ? campaign.variable_mapping : null);
+
+        if (contactIds.length > 0) {
+          const uniqueContactIds = Array.from(new Set(contactIds));
+          const contacts = await Contact.findAll({
+            where: { id: uniqueContactIds, userId, projectId },
+            attributes: ['id', 'phone', 'name', 'customFields']
+          });
+
+          const uniquePhones = new Set();
+          const audienceRecords = contacts
+            .filter((c) => {
+              const key = String(c.phone || '').trim();
+              if (!key || uniquePhones.has(key)) return false;
+              uniquePhones.add(key);
+              return true;
+            })
+            .map((c) => {
+              const v = buildAudienceVars(c, effectiveMapping);
+              return {
+                campaignId,
+                phone: c.phone,
+                var1: v.var1, var2: v.var2, var3: v.var3, var4: v.var4, var5: v.var5,
+                status: 'pending'
+              };
+            });
+
+          if (audienceRecords.length > 0) {
+            await CampaignAudience.bulkCreate(audienceRecords);
+            if (incomingMapping) {
+              campaign.variable_mapping = incomingMapping;
+              await campaign.save();
+            }
+          }
+        } else if (audience.length > 0) {
+          const audienceRecords = audience
+            .filter(aud => aud && aud.phone)
+            .map(aud => ({
+              campaignId,
+              phone: aud.phone,
+              var1: aud.var1 || null,
+              var2: aud.var2 || null,
+              var3: aud.var3 || null,
+              var4: aud.var4 || null,
+              var5: aud.var5 || null,
+              status: 'pending'
+            }));
+          if (audienceRecords.length > 0) {
+            await CampaignAudience.bulkCreate(audienceRecords);
+          }
+        } else {
+          // Last-resort fallback: if no payload audience is passed, start with all active contacts in project.
+          const contacts = await Contact.findAll({
+            where: { userId, projectId, status: 'active' },
+            attributes: ['id', 'phone', 'name', 'customFields']
+          });
+          const uniquePhones = new Set();
+          const audienceRecords = contacts
+            .filter((c) => {
+              const key = String(c.phone || '').trim();
+              if (!key || uniquePhones.has(key)) return false;
+              uniquePhones.add(key);
+              return true;
+            })
+            .map((c) => {
+              const v = buildAudienceVars(c, effectiveMapping);
+              return {
+                campaignId,
+                phone: c.phone,
+                var1: v.var1, var2: v.var2, var3: v.var3, var4: v.var4, var5: v.var5,
+                status: 'pending'
+              };
+            });
+          if (audienceRecords.length > 0) {
+            await CampaignAudience.bulkCreate(audienceRecords);
+          }
+        }
+
+        audienceCount = await CampaignAudience.count({ where: { campaignId } });
+      }
+
       if (audienceCount === 0) {
         return res.status(400).json({
           success: false,
-          message: 'Add contacts and map template variables before sending'
+          message: 'Add audience before sending: call /campaigns/:id/contacts or pass contactIds + variable_mapping (or audience[]) in this start request'
         });
       }
       campaign.status = 'PENDING';
       campaign.total = audienceCount;
       campaign.totalRecipients = audienceCount;
       await campaign.save();
+    }
+
+    const startPaused = req.body?.startPaused === true || req.body?.start_paused === true;
+
+    // Optional: allow creating audience now but delaying send until resume is called.
+    if (startPaused) {
+      campaign.status = 'PAUSED';
+      await campaign.save();
+      return res.json({
+        success: true,
+        message: 'Campaign prepared and paused successfully',
+        campaignId: campaign.id,
+        status: campaign.status
+      });
     }
 
     // Update status to PROCESSING
@@ -478,10 +642,11 @@ exports.pauseCampaign = async (req, res) => {
       });
     }
 
-    if (campaign.status !== 'PROCESSING') {
+    if (!['PROCESSING', 'PENDING'].includes(campaign.status)) {
       return res.status(400).json({
         success: false,
-        message: 'Campaign is not processing'
+        message: 'Campaign is not in a pausable state',
+        currentStatus: campaign.status
       });
     }
 

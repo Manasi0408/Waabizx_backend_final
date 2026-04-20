@@ -5,6 +5,18 @@ const socketService = require('../services/socketService');
 const { upsertConversationWithQuota } = require('../services/conversationBillingService');
 const { requireProjectId } = require('../utils/projectScope');
 
+const normalizePhone = (value) => String(value || '').trim().replace(/\D/g, '');
+const extractTemplateVariableNumbers = (content = '') => {
+  const matches = String(content).match(/\{\{(\d+)\}\}/g) || [];
+  return Array.from(
+    new Set(
+      matches
+        .map((m) => parseInt(m.replace(/[{}]/g, ''), 10))
+        .filter((n) => Number.isFinite(n))
+    )
+  ).sort((a, b) => a - b);
+};
+
 // Send message via Meta API
 exports.sendMessage = async (req, res) => {
   try {
@@ -41,7 +53,7 @@ exports.sendMessage = async (req, res) => {
 
     // Normalize phone number format (ensure it has country code)
     // Remove any spaces, dashes, parentheses
-    phone = phone.toString().replace(/[\s\-\(\)]/g, '');
+    phone = normalizePhone(phone);
     
     // If phone doesn't start with country code, log warning but still try
     if (!phone.match(/^\d{10,15}$/)) {
@@ -628,6 +640,7 @@ exports.sendTemplate = async (req, res) => {
     const projectId = requireProjectId(req, res);
     if (!projectId) return;
     const { phone, templateName, templateLanguage = "en_US", templateParams = [] } = req.body;
+    const normalizedPhone = normalizePhone(phone);
     
     // Get template content from database
     let templateContent = `Template: ${templateName}`;
@@ -647,7 +660,7 @@ exports.sendTemplate = async (req, res) => {
     }
 
     // Validate input
-    if (!phone || !templateName) {
+    if (!normalizedPhone || !templateName) {
       return res.json({ 
         success: false, 
         msg: "Missing required fields: phone, templateName" 
@@ -666,15 +679,15 @@ exports.sendTemplate = async (req, res) => {
     }
 
     // Find or create contact (for template messages, we can create new contacts)
-    let contact = await Contact.findOne({ where: { phone, userId, projectId } });
+    let contact = await Contact.findOne({ where: { phone: normalizedPhone, userId, projectId } });
 
     if (!contact) {
       // Create new contact if doesn't exist (for template messages)
       contact = await Contact.create({
         userId,
         projectId,
-        phone,
-        name: phone, // Default name to phone number
+        phone: normalizedPhone,
+        name: normalizedPhone, // Default name to phone number
         status: 'active'
       });
       console.log('✅ New contact created for template (ID:', contact.id + ')');
@@ -703,7 +716,13 @@ exports.sendTemplate = async (req, res) => {
 
       return res.status(403).json({
         success: false,
-        msg: "Blocked (opt-out / not opted-in)"
+        msg: "Blocked (opt-out / not opted-in)",
+        details: {
+          contactId: contact.id,
+          phone: normalizedPhone,
+          status: contact.status,
+          whatsappOptInAt: contact.whatsappOptInAt
+        }
       });
     }
 
@@ -711,7 +730,7 @@ exports.sendTemplate = async (req, res) => {
     // Charges only when a new conversation session starts.
     let billingAllowed = true;
     try {
-      const billing = await upsertConversationWithQuota(userId, phone);
+      const billing = await upsertConversationWithQuota(userId, normalizedPhone);
       billingAllowed = !!billing.allowed;
     } catch (billingErr) {
       console.error('Conversation billing check failed (messageController.sendTemplate):', billingErr?.message || billingErr);
@@ -742,7 +761,7 @@ exports.sendTemplate = async (req, res) => {
     // Build template payload
     const templatePayload = {
       messaging_product: "whatsapp",
-      to: phone,
+      to: normalizedPhone,
       type: "template",
       template: {
         name: templateName,
@@ -768,6 +787,30 @@ exports.sendTemplate = async (req, res) => {
       } else if (typeof templateParams === 'object') {
         paramsArray = Object.values(templateParams);
       }
+    }
+
+    // Validate template parameter count against local template placeholders.
+    // This avoids Meta error (#132000) with a clearer API response.
+    const requiredVarNums = extractTemplateVariableNumbers(templateContent);
+    const expectedParamsCount = requiredVarNums.length;
+    const providedParamsCount = paramsArray.length;
+
+    if (expectedParamsCount > 0 && providedParamsCount !== expectedParamsCount) {
+      return res.status(400).json({
+        success: false,
+        msg: "Invalid templateParams count",
+        details: {
+          templateName,
+          templateLanguage,
+          expectedParamsCount,
+          providedParamsCount,
+          expectedPlaceholders: requiredVarNums.map((n) => `{{${n}}}`)
+        }
+      });
+    }
+
+    if (expectedParamsCount === 0) {
+      paramsArray = [];
     }
     
     if (paramsArray && paramsArray.length > 0) {
@@ -930,7 +973,7 @@ exports.sendTemplate = async (req, res) => {
         const messageData = {
           id: savedMessage.id,
           contactId: contact.id,
-          phone: phone,
+          phone: normalizedPhone,
           content: templateContent, // Use actual template content
           type: 'outgoing',
           status: savedMessage.status,

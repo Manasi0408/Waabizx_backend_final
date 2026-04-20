@@ -28,20 +28,20 @@ const AnalyticsModel = {
 
   // OVERVIEW
   getOverview: async (timeRange = 'all', userId) => {
-    const dateFilter = getDateFilter(timeRange, 'sentAt');
+    const dateFilter = getDateFilter(timeRange, 'm.sentAt');
     const [rows] = await db.query(`
       SELECT
-        SUM(type = 'outgoing') AS messagesSent,
-        SUM(status = 'delivered') AS delivered,
-        SUM(status = 'read') AS \`read\`,
-        SUM(status = 'failed') AS failed,
-        SUM(type = 'incoming') AS replies
+        COALESCE(SUM(m.type = 'outgoing'), 0) AS messagesSent,
+        COALESCE(SUM(m.status = 'delivered'), 0) AS delivered,
+        COALESCE(SUM(m.status = 'read'), 0) AS \`read\`,
+        COALESCE(SUM(m.status = 'failed'), 0) AS failed,
+        COALESCE(SUM(m.type = 'incoming'), 0) AS replies
       FROM messages m
       LEFT JOIN contacts ctt ON ctt.id = m.contactId
       LEFT JOIN campaigns cc ON cc.id = m.campaignId
       WHERE ${dateFilter}
         AND (ctt.userId = ? OR cc.userId = ?)
-    `, [userId, userId]);
+    `, { replacements: [userId, userId] });
     return rows[0];
   },
 
@@ -81,7 +81,7 @@ const AnalyticsModel = {
       console.log('Query Params:', queryParams);
       console.log('TimeRange:', timeRange, 'UserId:', userId);
       
-      const [campaignRows] = await db.query(query, queryParams);
+      const [campaignRows] = await db.query(query, { replacements: queryParams });
       
       console.log('Campaign Rows Found:', campaignRows ? campaignRows.length : 0);
       console.log('Sample Campaign Row:', campaignRows && campaignRows.length > 0 ? campaignRows[0] : 'No rows');
@@ -104,7 +104,7 @@ const AnalyticsModel = {
               AND m.type = 'incoming'
               AND ${messageDateFilter}
             GROUP BY m.campaignId
-          `, campaignIds);
+          `, { replacements: campaignIds });
           
           if (replyRows && replyRows.length > 0) {
             replyRows.forEach(row => {
@@ -150,7 +150,7 @@ const AnalyticsModel = {
       LEFT JOIN campaigns cc ON cc.id = m.campaignId
       WHERE m.type = 'outgoing' AND ${dateFilter}
         AND (ctt.userId = ? OR cc.userId = ?)
-    `, [userId, userId]);
+    `, { replacements: [userId, userId] });
     return rows[0];
   },
 
@@ -162,21 +162,21 @@ const AnalyticsModel = {
     const [[totalContacts]] = await db.query(`
       SELECT COUNT(*) total FROM contacts 
       WHERE userId = ? AND ${contactDateFilter}
-    `, [userId]);
+    `, { replacements: [userId] });
     const [[optedOut]] = await db.query(`
       SELECT COUNT(*) total FROM contacts 
       WHERE userId = ? AND status = 'unsubscribed' AND ${contactDateFilter}
-    `, [userId]);
+    `, { replacements: [userId] });
     const [[newInRange]] = await db.query(`
       SELECT COUNT(*) total FROM contacts
       WHERE userId = ? AND ${contactDateFilter}
-    `, [userId]);
+    `, { replacements: [userId] });
     const [[activeUsers]] = await db.query(`
       SELECT COUNT(DISTINCT contactId) total
       FROM messages m
       INNER JOIN contacts ctt ON ctt.id = m.contactId
       WHERE m.type = 'incoming' AND ${messageDateFilter} AND ctt.userId = ?
-    `, [userId]);
+    `, { replacements: [userId] });
 
     return {
       totalContacts: totalContacts.total,
@@ -196,7 +196,7 @@ const AnalyticsModel = {
       LEFT JOIN campaigns cc ON cc.id = m.campaignId
       WHERE m.type = 'outgoing' AND ${dateFilter}
         AND (ctt.userId = ? OR cc.userId = ?)
-    `, [userId, userId]);
+    `, { replacements: [userId, userId] });
 
     const conversations = rows[0].conversations;
     const costPerConversation = 0.3; // ₹0.30 dummy
@@ -210,7 +210,7 @@ const AnalyticsModel = {
       WHERE m.type = 'outgoing'
         AND DATE(m.sentAt) = CURDATE()
         AND (ctt.userId = ? OR cc.userId = ?)
-    `, [userId, userId]);
+    `, { replacements: [userId, userId] });
 
     const [monthRows] = await db.query(`
       SELECT COUNT(*) conversations
@@ -220,7 +220,7 @@ const AnalyticsModel = {
       WHERE m.type = 'outgoing'
         AND m.sentAt >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
         AND (ctt.userId = ? OR cc.userId = ?)
-    `, [userId, userId]);
+    `, { replacements: [userId, userId] });
 
     const costToday = (todayRows[0].conversations * costPerConversation).toFixed(2);
     const costThisMonth = (monthRows[0].conversations * costPerConversation).toFixed(2);

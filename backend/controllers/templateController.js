@@ -67,6 +67,11 @@ exports.createMetaTemplate = async (req, res) => {
     }
     
     const userId = req.user.id;
+    const projectId =
+      req.projectId ||
+      req.user.projectId ||
+      requireProjectId(req, res);
+    if (!projectId) return;
     const { name, category, language = "en_US", components } = req.body;
     const normalizedName = normalizeMetaTemplateName(name);
 
@@ -557,9 +562,16 @@ exports.getTemplateById = async (req, res) => {
     if (!projectId) return;
     const { id } = req.params;
 
-    const template = await Template.findOne({
+    let template = await Template.findOne({
       where: { id, userId, projectId }
     });
+
+    // Allow lookup by Meta template id as well, so clients can use either local id or metaTemplateId.
+    if (!template) {
+      template = await Template.findOne({
+        where: { metaTemplateId: String(id), userId, projectId }
+      });
+    }
 
     if (!template) {
       return res.status(404).json({
@@ -722,7 +734,13 @@ exports.getMetaTemplates = async (req, res) => {
           content: bodyText,
           category: category,
           status: status,
-          variables: [] // Can be extracted from template if needed
+          variables: [], // Can be extracted from template if needed
+          metaTemplateId: metaTemplate.id ? String(metaTemplate.id) : null,
+          metaStatus: metaTemplate.status || null,
+          rejectionReason:
+            metaTemplate.status === 'REJECTED'
+              ? (metaTemplate.rejection_reason || metaTemplate.reason || null)
+              : null
         };
 
         if (existingTemplate) {
