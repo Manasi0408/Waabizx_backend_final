@@ -12,6 +12,21 @@ function statusStyles(status) {
 function ProjectCard({ project }) {
   const status = project.status || "N/A";
   const { dot, pill } = statusStyles(status);
+  const statusNormalized = String(status).toLowerCase();
+  const isApproved = ["approved", "active", "live", "verified"].includes(statusNormalized);
+  const activePlan =
+    project.activePlan ||
+    project.active_plan ||
+    project.planName ||
+    project.plan_name ||
+    "FREE FOREVER";
+  const projectNumber =
+    project.whatsappNumber ||
+    project.whatsapp_number ||
+    project.phone ||
+    project.mobileNumber ||
+    project.mobile_number ||
+    "--";
   const created = project.created_at ? new Date(project.created_at).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -38,10 +53,31 @@ function ProjectCard({ project }) {
             </h3>
           </div>
 
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Status</p>
+              <span className={`mt-1 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${pill}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden />
+                {isApproved ? "Verified" : status}
+              </span>
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Active plan</p>
+              <p className="mt-1 text-sm font-bold text-sky-800">{String(activePlan).toUpperCase()}</p>
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Number</p>
+            <p className="mt-1 text-[22px] leading-none font-semibold text-emerald-700 tabular-nums">
+              {projectNumber}
+            </p>
+          </div>
+
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${pill}`}>
               <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden />
-              {status}
+              {isApproved ? "Approved" : "Not approved"}
             </span>
           </div>
 
@@ -52,14 +88,13 @@ function ProjectCard({ project }) {
             <span>Created {created}</span>
           </div>
 
-          <div className="mt-5 flex items-center justify-between border-t border-gray-100/90 pt-4">
-            <span className="text-xs font-semibold text-gray-400">Workspace</span>
-            <span className="inline-flex items-center gap-1 text-sm font-bold text-sky-600 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-sky-700">
-              Open
-              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-              </svg>
-            </span>
+          <div className="mt-5 border-t border-gray-100/90 pt-4">
+            <button
+              type="button"
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-slate-600 transition-all hover:border-sky-300 hover:text-sky-700"
+            >
+              View
+            </button>
           </div>
         </div>
       </div>

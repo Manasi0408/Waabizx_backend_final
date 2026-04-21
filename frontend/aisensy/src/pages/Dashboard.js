@@ -6,6 +6,7 @@ import { getNotifications, markAsRead, markAllAsRead } from '../services/notific
 import { getDashboardStats, getConversationQuota } from '../services/dashboardService';
 import MainSidebarNav from '../components/MainSidebarNav';
 import AdminHeaderProjectSwitch from '../components/AdminHeaderProjectSwitch';
+import AgentRightPanel from '../components/AgentRightPanel';
 
 function Dashboard() {
   const navigate = useNavigate();
@@ -42,8 +43,10 @@ function Dashboard() {
   });
   const [loadingQuota, setLoadingQuota] = useState(true);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
+  const [isWhatsAppApiLive, setIsWhatsAppApiLive] = useState(false);
   const [chartTimeRange, setChartTimeRange] = useState(1); // 1 (Today), 7, 30, or 90 days
   const notificationRef = useRef(null);
+  const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
   // Fetch user profile on component mount
   useEffect(() => {
@@ -192,6 +195,33 @@ function Dashboard() {
     };
   }, [loading, user?.id]);
 
+  // Show WhatsApp API LIVE only when onboarding is completed for this account.
+  useEffect(() => {
+    const clientId = Number(user?.id);
+    if (!Number.isInteger(clientId) || clientId <= 0) {
+      setIsWhatsAppApiLive(false);
+      return;
+    }
+
+    let cancelled = false;
+    const fetchOnboardingStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/meta/onboarding-status?client_id=${clientId}`);
+        const data = await res.json();
+        if (!cancelled) {
+          setIsWhatsAppApiLive(Boolean(res.ok && data?.success && data?.onboardingCompleted));
+        }
+      } catch (_) {
+        if (!cancelled) setIsWhatsAppApiLive(false);
+      }
+    };
+
+    fetchOnboardingStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [API_BASE, user?.id]);
+
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -288,6 +318,16 @@ function Dashboard() {
           <span className="text-gray-300 hidden md:block">|</span>
           <h2 className="text-lg font-semibold text-sky-700 hidden md:block tracking-tight">Dashboard</h2>
           <AdminHeaderProjectSwitch />
+          {isWhatsAppApiLive ? (
+            <div className="hidden lg:flex items-center gap-2 ml-2 pl-2 border-l border-sky-100/80">
+              <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+                WhatsApp Business API Status :
+              </span>
+              <span className="inline-flex items-center rounded-full bg-emerald-50 text-emerald-700 px-2.5 py-1 text-[10px] font-bold ring-1 ring-emerald-200/80">
+                LIVE
+              </span>
+            </div>
+          ) : null}
         </div>
         
         {/* Right Side Icons */}
@@ -474,7 +514,9 @@ function Dashboard() {
 
         {/* Main Content */}
         <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-sky-50/90 via-white to-sky-100/50">
-          <div className="p-4 md:p-8 lg:p-10 max-w-[1600px] mx-auto">
+          <div className="p-4 md:p-8 lg:p-10 max-w-[1800px] mx-auto">
+          <div className="flex flex-col xl:flex-row xl:items-start gap-6 xl:gap-8">
+          <div className="flex-1 min-w-0">
           {/* Header Greeting */}
           <div className="relative mb-8 md:mb-10 rounded-3xl overflow-hidden bg-gradient-to-br from-sky-900 via-sky-800 to-blue-950 px-6 py-8 md:px-10 md:py-10 shadow-xl shadow-sky-900/30 ring-1 ring-sky-400/20">
             <div className="motion-hero-blob-a pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-sky-400/20 blur-3xl" aria-hidden />
@@ -769,6 +811,17 @@ function Dashboard() {
                 )}
               </ul>
             </div>
+          </div>
+          </div>
+
+          <aside className="w-full xl:w-[22rem] shrink-0 xl:sticky xl:top-4 xl:self-start">
+            <AgentRightPanel
+              user={user}
+              selectedProject={selectedProject}
+              conversationQuota={conversationQuota}
+              loadingQuota={loadingQuota}
+            />
+          </aside>
           </div>
           </div>
         </main>

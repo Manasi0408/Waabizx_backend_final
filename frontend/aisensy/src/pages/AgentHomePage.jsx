@@ -3,7 +3,6 @@ import AgentSidebar from "../components/AgentSidebar";
 import AgentTopbar from "../components/AgentTopbar";
 import AgentStatusCards from "../components/AgentStatusCards";
 import AgentWidgets from "../components/AgentWidgets";
-import AgentRightPanel from "../components/AgentRightPanel";
 
 function AgentHomePage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -23,7 +22,7 @@ function AgentHomePage() {
               <div className="absolute -bottom-32 right-1/4 w-[16rem] h-[16rem] bg-cyan-300/20 motion-page-blob" style={{ animationDelay: "-2s" }} />
             </div>
 
-            <div className="relative z-0 p-4 md:p-6 lg:p-8 flex flex-col xl:flex-row gap-6 xl:gap-8 max-w-[1800px] mx-auto">
+            <div className="relative z-0 p-4 md:p-6 lg:p-8 flex flex-col gap-6 xl:gap-8 max-w-[1800px] mx-auto">
               <div className="flex-1 min-w-0 space-y-6 md:space-y-8">
                 <AgentStatusCards />
                 <div className="group motion-enter motion-delay-1 overflow-hidden rounded-2xl border border-gray-100/90 shadow-lg shadow-gray-200/40 ring-1 ring-gray-100/80 motion-hover-lift transition-shadow duration-300 hover:shadow-xl hover:shadow-sky-500/10">
@@ -34,10 +33,6 @@ function AgentHomePage() {
                   />
                 </div>
                 <AgentWidgets />
-              </div>
-
-              <div className="w-full xl:w-80 xl:shrink-0">
-                <AgentRightPanel />
               </div>
             </div>
           </div>

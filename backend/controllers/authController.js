@@ -273,15 +273,8 @@ exports.register = async (req, res) => {
     const trimmedEmail = String(email).trim().toLowerCase();
     const trimmedName = String(name).trim();
     const trimmedPassword = String(password).trim();
-    const normalizedRole =
-      roleRaw && String(roleRaw).trim() !== ''
-        ? String(roleRaw).trim().toLowerCase()
-        : 'user';
-
-    // Role validation (supports Agent/Manager casing too)
-    if (!['admin', 'user', 'agent', 'manager', 'super_admin'].includes(normalizedRole)) {
-      return res.status(400).json({ message: 'Invalid role' });
-    }
+    // New accounts are always admin by default.
+    const normalizedRole = 'admin';
     
     // Simple email validation - just check for @
     if (!trimmedEmail.includes('@')) {
@@ -424,7 +417,8 @@ exports.requestRegisterOtp = async (req, res) => {
     const trimmedEmail = String(email).trim().toLowerCase();
     const trimmedName = String(name).trim();
     const trimmedPassword = String(password).trim();
-    const normalizedRole = String(roleRaw || 'user').trim().toLowerCase() || 'user';
+    // New accounts are always admin by default.
+    const normalizedRole = 'admin';
     const mobileNumber = normalizeMobileNumber(mobileNumberRaw);
 
     if (!trimmedEmail.includes('@')) {
@@ -436,9 +430,7 @@ exports.requestRegisterOtp = async (req, res) => {
     if (!/^\d{10}$/.test(mobileNumber)) {
       return res.status(400).json({ success: false, message: 'Please provide a valid 10-digit mobile number without country code' });
     }
-    if (!['admin', 'user', 'agent', 'manager', 'super_admin'].includes(normalizedRole)) {
-      return res.status(400).json({ success: false, message: 'Invalid role' });
-    }
+    void roleRaw;
 
     const existingByEmail = await User.findOne({ where: { email: trimmedEmail } });
     if (existingByEmail) {
@@ -1008,7 +1000,8 @@ exports.login = async (req, res) => {
       name: user.name,
       email: user.email,
       avatar: user.avatar,
-      role: role || 'agent'
+      role: role || 'agent',
+      mobileNumber: user.mobileNumber || null
     };
     console.log('LOGIN USER:', loginUser);
 

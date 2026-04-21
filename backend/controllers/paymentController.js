@@ -1,6 +1,13 @@
 const crypto = require('crypto');
 const Razorpay = require('razorpay');
 
+const ALLOWED_PURPOSES = new Set(['wcc', 'ads_credits', 'plan_purchase']);
+const MIN_AMOUNT_BY_PURPOSE = {
+  wcc: 5000,
+  ads_credits: 1500,
+  plan_purchase: 100,
+};
+
 const getRazorpayInstance = () => {
   const keyId = process.env.RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
@@ -16,13 +23,20 @@ const getRazorpayInstance = () => {
 // Create Razorpay order for WCC purchase
 exports.createWccOrder = async (req, res) => {
   try {
-    const { amount } = req.body;
+    const { amount, purpose = 'wcc', metadata = {} } = req.body;
     const userId = req.user?.id;
 
     if (!userId) {
       return res.status(401).json({
         success: false,
         message: 'Authentication required',
+      });
+    }
+
+    if (!ALLOWED_PURPOSES.has(String(purpose))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid payment purpose',
       });
     }
 
@@ -34,11 +48,11 @@ exports.createWccOrder = async (req, res) => {
       });
     }
 
-    // UI uses minimum WCC amount of 5000
-    if (numericAmount < 5000) {
+    const minAmount = MIN_AMOUNT_BY_PURPOSE[purpose] || 1;
+    if (numericAmount < minAmount) {
       return res.status(400).json({
         success: false,
-        message: 'Minimum amount is 5000',
+        message: `Minimum amount is ${minAmount}`,
       });
     }
 
@@ -57,8 +71,13 @@ exports.createWccOrder = async (req, res) => {
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: 'INR',
-      receipt: `wcc_${userId}_${Date.now()}`,
+      receipt: `${purpose}_${userId}_${Date.now()}`.slice(0, 40),
       payment_capture: 1,
+      notes: {
+        userId: String(userId),
+        purpose: String(purpose),
+        metadata: JSON.stringify(metadata || {}).slice(0, 250),
+      },
     });
 
     return res.json({
@@ -67,6 +86,7 @@ exports.createWccOrder = async (req, res) => {
       amount: order.amount,
       currency: order.currency,
       keyId: process.env.RAZORPAY_KEY_ID,
+      purpose,
     });
   } catch (error) {
     return res.status(500).json({

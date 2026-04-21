@@ -41,6 +41,15 @@ function ProjectDashboard() {
   };
 
   const count = projects.length;
+  const sortedProjects = [...projects].sort((a, b) => {
+    const approvedValues = ["approved", "active", "live", "verified"];
+    const aApproved = approvedValues.includes(String(a?.status || "").toLowerCase()) ? 1 : 0;
+    const bApproved = approvedValues.includes(String(b?.status || "").toLowerCase()) ? 1 : 0;
+    if (aApproved !== bApproved) return bApproved - aApproved;
+    const aDate = new Date(a?.created_at || a?.createdAt || 0).getTime();
+    const bDate = new Date(b?.created_at || b?.createdAt || 0).getTime();
+    return bDate - aDate;
+  });
 
   return (
     <div className="relative min-h-screen overflow-x-hidden bg-gradient-to-b from-sky-50 via-white to-sky-100/60">
@@ -206,7 +215,7 @@ function ProjectDashboard() {
             </div>
           ) : (
             <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
-              {projects.map((project) => (
+              {sortedProjects.map((project) => (
                 <div
                   key={project.id}
                   role="button"
